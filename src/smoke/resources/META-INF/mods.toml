@@ -1,0 +1,7 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+[[mods]]
+modId="point_runtime_probe"
+version="1.0"
+displayName="Point runtime probe (development only)"

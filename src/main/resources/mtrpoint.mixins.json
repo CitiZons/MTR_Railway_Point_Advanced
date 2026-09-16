@@ -1,0 +1,1 @@
+{"required":true,"minVersion":"0.8","package":"org.mtrpoint.mixin","compatibilityLevel":"JAVA_17","refmap":"mtrpoint.refmap.json","mixins":["SimulatorObserverMixin"],"client":["RailRenderMixin","RailResourceAccess","VehicleProgressAccess"],"injectors":{"defaultRequire":1}}
