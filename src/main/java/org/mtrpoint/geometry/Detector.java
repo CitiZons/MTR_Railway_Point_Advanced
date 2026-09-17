@@ -9,14 +9,28 @@ public final class Detector {
         for(Track t:tracks){nodes.computeIfAbsent(t.startNode,k->new ArrayList<>()).add(t);nodes.computeIfAbsent(t.endNode,k->new ArrayList<>()).add(t.reverse());}
         for(var entry:nodes.entrySet()) {
             var ts=entry.getValue(); ts.sort(Comparator.comparing(t->t.id));
-            if(ts.size()<2||ts.size()>3)continue;
+            if(ts.size()<2)continue;
+            for(int i=0;i<ts.size();i++)for(int k=i+1;k<ts.size();k++)for(int l=k+1;l<ts.size();l++){
+                Track a=ts.get(i),b=ts.get(k),c=ts.get(l);
+                if(a.tangent(0).dot(b.tangent(0))<.5||a.tangent(0).dot(c.tangent(0))<.5||b.tangent(0).dot(c.tangent(0))<.5)continue;
+                boolean fourth=false;for(int n=0;n<ts.size();n++)if(n!=i&&n!=k&&n!=l&&ts.get(n).tangent(0).dot(a.tangent(0))>.5)fourth=true;if(fourth)continue;
+                double limit=Math.min(80,Math.min(a.length,Math.min(b.length,c.length)));V3 normal=a.tangent(0).lateral();
+                var fan=new ArrayList<>(List.of(a,b,c));
+                double extent=0;for(double d=1;d<limit;d+=.25)if(Math.min(a.at(d).distance(b.at(d)),Math.min(a.at(d).distance(c.at(d)),b.at(d).distance(c.at(d))))>=2.5){extent=Math.min(limit,d+2);break;}
+                double orderAt=extent;fan.sort(Comparator.comparingDouble(t->t.at(orderAt).dot(normal)));
+                if(extent>0)result.add(new Junction("t:"+entry.getKey()+":"+a.id+":"+b.id+":"+c.id,Junction.Kind.THREE,fan.get(0),fan.get(2),a.at(0),0,0,extent,fan.get(1)));
+            }
             for(int i=0;i<ts.size();i++)for(int j=i+1;j<ts.size();j++) {
                 Track a=ts.get(i),b=ts.get(j);
-                if(a.length<5||b.length<5||a.tangent(0).dot(b.tangent(0))<.85)continue;
+                if(a.length<5||b.length<5||a.tangent(0).dot(b.tangent(0))<.5)continue;
+                // A pair is valid only when no third branch points into the same half of the node.
+                // Two opposite pairs form two separately editable Y turnouts; three-way fans have their own three-branch model.
+                boolean third=false;for(int k=0;k<ts.size();k++)if(k!=i&&k!=j&&ts.get(k).tangent(0).dot(a.tangent(0))>.5)third=true;
+                if(third)continue;
                 double limit=Math.min(80,Math.min(a.length,b.length)),extent=0;
                 for(double s=1;s<limit;s+=.25)if(a.at(s).distance(b.at(s))>=2.5){extent=Math.min(limit,s+2);break;}
                 if(extent==0)continue;
-                // Same direction diverging branches only. Four-way junctions are not Y switches.
+                // Same direction diverging branches only. Opposite branch pairs are independent switches.
                 result.add(new Junction("y:"+entry.getKey()+":"+a.id+":"+b.id,Junction.Kind.Y,a,b,a.at(0),0,0,extent));
             }
         }
@@ -28,17 +42,18 @@ public final class Detector {
                 for(int z=(int)Math.floor(Math.min(a.z(),b.z())/8);z<=(int)Math.floor(Math.max(a.z(),b.z())/8);z++) {
                     String cell=x+":"+z; var entries=bins.computeIfAbsent(cell,k->new ArrayList<>());
                     for(Segment other:entries) {
-                        if(t.id.equals(other.t.id)||t.sharesNode(other.t))continue;
+                        if(t.id.equals(other.t.id))continue;
                         String pair=t.id.compareTo(other.t.id)<0?t.id+"/"+i+"|"+other.t.id+"/"+other.i:other.t.id+"/"+other.i+"|"+t.id+"/"+i;
                         if(!seen.add(pair))continue;
                         double[] uv=intersection(a,b,other.t.points.get(other.i-1),other.t.points.get(other.i)); if(uv==null)continue;
                         V3 p=a.lerp(b,uv[0]),q=other.t.points.get(other.i-1).lerp(other.t.points.get(other.i),uv[1]);
                         if(Math.abs(p.y()-q.y())>.08)continue;
                         double sine=Math.abs(V3.crossXZ(b.sub(a).unit(),other.t.points.get(other.i).sub(other.t.points.get(other.i-1)).unit()));
-                        if(sine<.12)continue;
+                        if(sine<.025)continue;
                         double sa=t.distance[i-1]+uv[0]*(t.distance[i]-t.distance[i-1]),sb=other.t.distance[other.i-1]+uv[1]*(other.t.distance[other.i]-other.t.distance[other.i-1]);
-                        double extent=Math.min(16,2/sine+1);
-                        if(Math.min(Math.min(sa,t.length-sa),Math.min(sb,other.t.length-sb))<extent)continue;
+                        double extent=Math.min(80,2/sine+1);
+                        // Shared endpoints are not crossings; an interior recrossing still is.
+                        if(Math.min(Math.min(sa,t.length-sa),Math.min(sb,other.t.length-sb))<.5)continue;
                         Track first=t.id.compareTo(other.t.id)<0?t:other.t,second=first==t?other.t:t;
                         String id="x:"+first.id+":"+second.id+":"+Math.round(p.x()*4)+":"+Math.round(p.z()*4);
                         if(result.stream().noneMatch(j->j.kind()==Junction.Kind.DIAMOND&&j.a().id.equals(first.id)&&j.b().id.equals(second.id)&&j.center().distance(p)<1))

@@ -13,15 +13,44 @@ public final class PointClient {
     public static final class View {
         public final Junction junction;public PointSettings settings;public Profile profile;public Set<String> styles;public double position,target,previewPosition=Double.NaN;public Mesh mesh;public String state="mtrpoint.idle";private double lastPosition=-1;private PointSettings lastSettings;
         public View(Junction j,PointSettings s,Profile p,Set<String> styles){junction=j;settings=s;profile=p;this.styles=Set.copyOf(styles);}
-        public Mesh mesh(){double visual=Double.isFinite(previewPosition)?previewPosition:position;if(mesh==null||lastSettings!=settings||Math.abs(lastPosition-visual)>.005){mesh=RailSampler.bank(PointMesh.build(junction,settings,profile,visual),junction);lastSettings=settings;lastPosition=visual;}return mesh;}
-        public void preview(PointSettings s){settings=s;profile=profileFor(junction,s);styles=stylesFor(junction,s);mesh=null;}
+        private Mesh left,middle,right;private int[] moving;private double lastFrame=-1;
+        public long builds;public ScissorsLayout scissors;
+        private Mesh buildAt(double position,PointMesh.YBoundary boundary){
+            Mesh result=scissors!=null&&junction.kind()==Junction.Kind.DIAMOND?scissors.centerMesh(settings,profile):PointMesh.build(junction,settings,profile,position,boundary);
+            if(scissors!=null&&junction.kind()!=Junction.Kind.DIAMOND)result=scissors.clip(result,junction);
+            return RailSampler.bank(result,junction,scissors==null?junction.tracks():scissors.tracks());
+        }
+        public Mesh mesh(){
+            double visual=Double.isFinite(previewPosition)?previewPosition:position;
+            if(left==null||lastSettings!=settings){
+                var boundary=scissors!=null&&junction.kind()==Junction.Kind.Y?scissors.boundary(junction,settings):RailSampler.yBoundary(junction,settings);
+                left=buildAt(0,boundary);
+                middle=junction.kind()==Junction.Kind.THREE?buildAt(.5,boundary):null;
+                right=junction.kind()!=Junction.Kind.DIAMOND?buildAt(1,boundary):left;
+                if(left.quads.size()!=right.quads.size()||middle!=null&&middle.quads.size()!=left.quads.size())throw new IllegalStateException("Animation topology changed");
+                var indices=new ArrayList<Integer>();for(int i=0;i<left.quads.size();i++)if(!left.quads.get(i).equals(right.quads.get(i))||middle!=null&&!left.quads.get(i).equals(middle.quads.get(i)))indices.add(i);else if(right!=left)right.quads.set(i,left.quads.get(i));
+                moving=indices.stream().mapToInt(Integer::intValue).toArray();mesh=new Mesh();mesh.quads.addAll(left.quads);lastSettings=settings;lastFrame=-1;builds++;
+            }
+            // Static steelwork and sleepers are built once. Only blade/frog vertices interpolate.
+            if(Math.abs(lastFrame-visual)>.005){
+                double blend=middle==null?visual:visual<.5?visual*2:visual*2-1;Mesh start=middle==null||visual<.5?left:middle,end=middle==null||visual>=.5?right:middle;
+                for(int i:moving){var a=start.quads.get(i);var b=end.quads.get(i);mesh.quads.set(i,new Mesh.Quad(a.a().lerp(b.a(),blend),a.b().lerp(b.b(),blend),a.c().lerp(b.c(),blend),a.d().lerp(b.d(),blend),a.surface(),a.part(),a.index(),a.uv()));}
+                lastFrame=visual;lastPosition=visual;
+            }return mesh;
+        }
+        public double renderedPosition(){return lastPosition;}
+        public void preview(PointSettings s){if(settings.equals(s)&&left!=null)return;settings=s;profile=profileFor(junction,s);styles=stylesFor(junction,s);left=null;mesh=null;refreshScissors();}
     }
     public static List<View> views=List.of();
     private static final Map<String,AppearanceData.Entry> SETTINGS=new HashMap<>();
+    private static final Map<String,List<View>> BY_RAIL=new HashMap<>();
+    private static List<Junction> groupJunctions=List.of();
+    private static Map<String,ScissorsLayout> groupsById=Map.of();
+    private static Map<String,List<PointNetwork.Movement>> movements=Map.of();
     private static PointNetwork.Motion motion;private static long motionReceived;
-    private static int ticks;private static Object level;private static long signature;private static String server="";
+    private static int ticks;private static Object level;private static long signature;private static boolean refreshProfiles;
     public static String message="";
-    public static void clear(){views=List.of();SETTINGS.clear();motion=null;signature=0;Profiles.clear();RailSampler.clear();}
+    public static void clear(){views=List.of();SETTINGS.clear();motion=null;signature=0;Profiles.clear();RailSampler.clear();BY_RAIL.clear();groupJunctions=List.of();groupsById=Map.of();movements=Map.of();PointRenderer.clear();}
     public static long revision(String id){return SETTINGS.getOrDefault(id,new AppearanceData.Entry(PointSettings.DEFAULT,0)).revision();}
     public static PointSettings saved(String id){return SETTINGS.getOrDefault(id,new AppearanceData.Entry(PointSettings.DEFAULT,0)).value();}
     public static void receive(PointNetwork.State m){
@@ -31,49 +60,70 @@ public final class PointClient {
         for(View v:views)if(v.junction.id().equals(m.id()))v.preview(saved(m.id()));
         if(mc.screen instanceof BlueprintScreen screen)screen.acknowledge(m.id(),m.message());
     }
-    public static void motion(PointNetwork.Motion m){motion=m;motionReceived=System.currentTimeMillis();}
+    public static void motion(PointNetwork.Motion m){motion=m;motionReceived=System.currentTimeMillis();movements=index(m.entries());}
     public static void tick(){
         var mc=Minecraft.getInstance();if(mc.level!=level){level=mc.level;clear();}if(mc.level==null)return;
         if(++ticks%20==0)rebuild();
+        if(!net.minecraftforge.fml.ModList.get().isLoaded("mtr_brsignal_addon")&&!views.isEmpty())movements=index(nativeMovements());
         for(View v:views){choose(v);double step=.05/v.settings.animationSeconds();v.position+=Math.max(-step,Math.min(step,v.target-v.position));}
     }
-    public static void invalidate(){signature=0;Profiles.clear();}
+    public static void invalidate(){signature=0;refreshProfiles=true;Profiles.clear();}
     public static void rebuild(){
         var mc=Minecraft.getInstance();if(mc.player==null)return;
         List<Rail> rails=MinecraftClientData.getInstance().railIdMap.values().stream().filter(r->r.getTransportMode()==TransportMode.TRAIN&&r.railMath.getLength()>1).filter(r->{var m=r.railMath;return mc.player.getX()>=m.minX-96&&mc.player.getX()<=m.maxX+96&&mc.player.getZ()>=m.minZ-96&&mc.player.getZ()<=m.maxZ+96;}).sorted(Comparator.comparing(Rail::getHexId)).toList();
-        // A bounded periodic resample includes changes made by Optional Rail and live resource reloads.
+        // Check identities and Optional Rail settings; unchanged tracks reuse their samples.
         var tracks=new ArrayList<Track>();long sig=1;
-        for(Rail r:rails){Track t=RailSampler.sample(r);if(t==null)continue;tracks.add(t);sig=31*sig+t.points.hashCode();sig=31*sig+r.getStyles().hashCode();}
+        for(Rail r:rails){Track t=RailSampler.sample(r);if(t==null)continue;tracks.add(t);sig=31*sig+System.identityHashCode(t);sig=31*sig+r.getStyles().hashCode();}
         if(sig==signature)return;signature=sig;
         Map<String,View> previous=new HashMap<>();views.forEach(v->previous.put(v.junction.id(),v));var next=new ArrayList<View>();
         for(Junction j:Detector.find(tracks)){
-            PointSettings s=saved(j.id());var v=new View(j,s,profileFor(j,s),stylesFor(j,s));View old=previous.get(j.id());if(old!=null){v.position=old.position;v.target=old.target;}
-            if(mc.screen instanceof BlueprintScreen editor&&editor.pointId().equals(j.id())){View existing=previous.get(j.id());if(existing!=null){next.add(existing);continue;}}next.add(v);
+            PointSettings s=saved(j.id());View old=previous.get(j.id());
+            if(old!=null&&!refreshProfiles&&old.junction.equals(j)&&old.settings.equals(s)&&old.styles.equals(stylesFor(j,s))&&old.profile==profileFor(j,s)){next.add(old);continue;}
+            var v=new View(j,s,profileFor(j,s),stylesFor(j,s));if(old!=null){v.position=old.position;v.target=old.target;}
+            if(mc.screen instanceof BlueprintScreen editor&&editor.pointId().equals(j.id())){View existing=previous.get(j.id());if(existing!=null){if(refreshProfiles){existing.left=null;existing.preview(existing.settings);}next.add(existing);continue;}}next.add(v);
         }
-        views=List.copyOf(next);
+        refreshProfiles=false;views=List.copyOf(next);refreshScissors();
+        RailSampler.retain(tracks.stream().map(t->t.id).collect(java.util.stream.Collectors.toSet()));
     }
-    public static List<String> styleIds(Junction j){var result=new LinkedHashSet<String>();for(String rail:List.of(j.a().id,j.b().id)){Rail r=MinecraftClientData.getInstance().railIdMap.get(rail);if(r!=null)for(String id:r.getStyles()){id=RailResource.getIdWithoutDirection(id);if(id.equals("default")){id=org.mtr.mapping.mapper.OptimizedRenderer.hasOptimizedRendering()&&org.mtr.mod.config.Config.getClient().getDefaultRail3D()?(r.isSiding()?"default_3d_siding":"default_3d"):"default";}result.add(id);}}return List.copyOf(result);}
+    private static void refreshScissors(){
+        var junctions=views.stream().filter(v->v.settings.enabled()).map(v->v.junction).toList();
+        if(!junctions.equals(groupJunctions)){
+            groupJunctions=junctions;var members=new HashMap<String,ScissorsLayout>();
+            for(var group:ScissorsLayout.find(junctions)){members.put(group.crossing().id(),group);for(var y:group.turnouts())members.put(y.id(),group);}
+            groupsById=members;
+        }
+        BY_RAIL.clear();for(View v:views){
+            ScissorsLayout group=groupsById.get(v.junction.id());if(!Objects.equals(group,v.scissors)){v.scissors=group;v.left=null;v.mesh=null;}
+            for(Track road:group!=null&&v.junction.kind()==Junction.Kind.DIAMOND?group.tracks():v.junction.tracks())BY_RAIL.computeIfAbsent(road.id,k->new ArrayList<>()).add(v);
+        }
+    }
+    public static List<String> styleIds(Junction j){var result=new LinkedHashSet<String>();for(Track track:j.tracks()){Rail r=MinecraftClientData.getInstance().railIdMap.get(track.id);if(r!=null)for(String id:r.getStyles()){id=RailResource.getIdWithoutDirection(id);if(id.equals("default")){id=org.mtr.mapping.mapper.OptimizedRenderer.hasOptimizedRendering()&&org.mtr.mod.config.Config.getClient().getDefaultRail3D()?(r.isSiding()?"default_3d_siding":"default_3d"):"default";}result.add(id);}}return List.copyOf(result);}
     private static Profile profileFor(Junction j,PointSettings s){if(!s.profileStyle().isBlank())return Profiles.forced(s.profileStyle());for(String id:styleIds(j)){var a=Profiles.get(id);if(a.track()&&a.profile()!=null)return a.profile();}return new Profile(1.435,.264,.068,.14,.165,Profile.STEEL,Profile.TIMBER,"unmapped",false);}
     private static Set<String> stylesFor(Junction j,PointSettings s){var styles=new HashSet<String>();if(!s.profileStyle().isBlank())styles.add(s.profileStyle());for(String id:styleIds(j))if(Profiles.get(id).track())styles.add(id);return styles;}
-    public static View nearest(V3 p){return views.stream().filter(v->v.junction.center().distance(p)<64).min(Comparator.comparingDouble(v->v.junction.center().distance(p))).orElse(null);}
+    public static V3 editCenter(View v){return v.junction.kind()!=Junction.Kind.DIAMOND?v.junction.a().at(Math.min(5,PointMesh.extent(v.junction,v.settings)/2)).lerp(v.junction.b().at(Math.min(5,PointMesh.extent(v.junction,v.settings)/2)),.5):v.junction.center();}
+    public static View nearest(V3 p){return views.stream().filter(v->v.junction.center().distance(p)<64).min(Comparator.comparingDouble(v->editCenter(v).distance(p))).orElse(null);}
     public static boolean suppress(Rail rail,String style,V3 p,double margin){
         if(rail==null)return false;style=RailResource.getIdWithoutDirection(style);
-        for(View v:views)if(v.settings.enabled()&&!v.styles.isEmpty()&&v.styles.contains(style)){
-            Junction j=v.junction;Junction mask=new Junction(j.id(),j.kind(),j.a(),j.b(),j.center(),j.sa(),j.sb(),PointMesh.extent(j,v.settings));
-            if(mask.contains(rail.getHexId(),p,margin))return true;
+        for(View v:BY_RAIL.getOrDefault(rail.getHexId(),List.of()))if(v.settings.enabled()&&!v.styles.isEmpty()&&v.styles.contains(style)){
+            Junction j=v.junction;
+            if(v.scissors!=null){if(v.scissors.owns(j,rail.getHexId(),p))return true;continue;}
+            if(j.contains(rail.getHexId(),p,margin,PointMesh.extent(j,v.settings)))return true;
         }return false;
     }
     private static void choose(View v){
-        if(v.junction.kind()!=Junction.Kind.Y)return;List<PointNetwork.Movement> candidates;
+        if(v.junction.kind()==Junction.Kind.DIAMOND)return;List<PointNetwork.Movement> candidates;
         boolean br=net.minecraftforge.fml.ModList.get().isLoaded("mtr_brsignal_addon");
-        if(br){if(motion==null||Minecraft.getInstance().level==null||!motion.dimension().equals(Minecraft.getInstance().level.dimension().location().toString())||System.currentTimeMillis()-motionReceived>3000){v.state="mtrpoint.waiting";return;}candidates=motion.entries();}
-        else candidates=nativeMovements();
-        String node=v.junction.a().startNode;List<PointNetwork.Movement> matches=candidates.stream().filter(m->m.node().equals(node)&&(uses(m,v.junction.a().id)||uses(m,v.junction.b().id))).sorted(Comparator.comparing((PointNetwork.Movement m)->!m.occupied()).thenComparingDouble(PointNetwork.Movement::distance).thenComparingLong(PointNetwork.Movement::vehicle)).toList();
+        if(br){if(motion==null||Minecraft.getInstance().level==null||!motion.dimension().equals(Minecraft.getInstance().level.dimension().location().toString())||System.currentTimeMillis()-motionReceived>3000){v.state="mtrpoint.waiting";return;}candidates=movements.getOrDefault(v.junction.a().startNode,List.of());}
+        else candidates=movements.getOrDefault(v.junction.a().startNode,List.of());
+        String node=v.junction.a().startNode;List<PointNetwork.Movement> matches=candidates.stream().filter(m->m.node().equals(node)&&v.junction.tracks().stream().anyMatch(t->uses(m,t.id))).sorted(Comparator.comparing((PointNetwork.Movement m)->!m.occupied()).thenComparingDouble(PointNetwork.Movement::distance).thenComparingLong(PointNetwork.Movement::vehicle)).toList();
         if(matches.isEmpty()){v.state="mtrpoint.idle";return;}var first=matches.get(0);
-        int selected=uses(first,v.junction.a().id)?0:1;
-        if(matches.stream().anyMatch(m->m.vehicle()!=first.vehicle()&&m.occupied()==first.occupied()&&(uses(m,v.junction.a().id)?0:1)!=selected)){v.state="mtrpoint.ambiguous";return;}
+        double selected=branch(v.junction,first);
+        if(matches.stream().anyMatch(m->m.vehicle()!=first.vehicle()&&m.occupied()==first.occupied()&&branch(v.junction,m)!=selected)){v.state="mtrpoint.ambiguous";return;}
         v.target=selected;v.state=first.occupied()?"mtrpoint.occupied":br?"mtrpoint.authorized":"mtrpoint.observed";
     }
+    private static double branch(Junction j,PointNetwork.Movement m){return uses(m,j.a().id)?0:j.third()!=null&&uses(m,j.third().id)?.5:1;}
+    private static Map<String,List<PointNetwork.Movement>> index(List<PointNetwork.Movement> entries){var result=new HashMap<String,List<PointNetwork.Movement>>();for(var m:entries)result.computeIfAbsent(m.node(),k->new ArrayList<>()).add(m);return result;}
+    public static List<String> profileChoices(Junction j){var ids=new LinkedHashSet<String>();ids.add("");ids.add("default_3d");ids.add("default_3d_siding");ids.addAll(styleIds(j));for(var r:org.mtr.mod.client.CustomResourceLoader.getRails())if(Profiles.get(r.getId()).track())ids.add(r.getId());return List.copyOf(ids);}
     private static boolean uses(PointNetwork.Movement m,String id){return m.from().equals(id)||m.to().equals(id);}
     private static List<PointNetwork.Movement> nativeMovements(){
         var out=new ArrayList<PointNetwork.Movement>();

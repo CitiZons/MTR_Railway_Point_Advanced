@@ -26,15 +26,21 @@ public final class BrObserver {
                 collect(out,(List<?>)call(path,"getTraversals"),tail,head,true,((Number)call(vehicle,"vehicleId")).longValue(),head);
             }
             for(Object authorization:(List<?>)manager.getMethod("getAuthorizedPaths",Simulator.class).invoke(null,simulator)){
-                collect(out,(List<?>)call(authorization,"traversals"),num(authorization,"startDistance"),num(authorization,"endDistance"),false,((Number)call(authorization,"vehicleId")).longValue(),num(authorization,"startDistance"));
+                // Authorized traversal subsets omit the incoming rail when a permission
+                // starts exactly at a node. Use immutable path context, but only emit
+                // boundaries inside the published active permission interval.
+                collectAuthorization(out,authorization);
             }
             latest.put(dimension,new PointNetwork.Motion(dimension,true,now,List.copyOf(out.subList(0,Math.min(8192,out.size())))));
         }catch(ReflectiveOperationException|RuntimeException ex){if(!warned){warned=true;PointMod.LOG.warn("BR read-only point observer unavailable; holding visual positions",ex);}latest.put(dimension,new PointNetwork.Motion(dimension,true,now,List.of()));}
     }
+    private static void collectAuthorization(List<PointNetwork.Movement> out,Object authorization)throws ReflectiveOperationException{
+        collect(out,(List<?>)call(call(authorization,"path"),"getTraversals"),num(authorization,"startDistance"),num(authorization,"endDistance"),false,((Number)call(authorization,"vehicleId")).longValue(),num(authorization,"startDistance"));
+    }
     private static void collect(List<PointNetwork.Movement> out,List<?> traversals,double begin,double end,boolean occupied,long vehicle,double head)throws ReflectiveOperationException{
         for(int i=1;i<traversals.size();i++){
             Object a=traversals.get(i-1),b=traversals.get(i);double boundary=num(a,"endDistance");
-            if(boundary<begin-.01||boundary>end+.01||!call(a,"endNode").equals(call(b,"startNode")))continue;
+            if(boundary<begin-.01||boundary>end+.01||!occupied&&boundary>=end-1e-6||!call(a,"endNode").equals(call(b,"startNode")))continue;
             net.minecraft.core.BlockPos node=(net.minecraft.core.BlockPos)call(a,"endNode");
             out.add(new PointNetwork.Movement(node.getX()+","+node.getY()+","+node.getZ(),(String)call(a,"sectionId"),(String)call(b,"sectionId"),occupied,vehicle,Math.abs(boundary-head)));
         }

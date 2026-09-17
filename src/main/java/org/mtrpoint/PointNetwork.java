@@ -11,7 +11,7 @@ import org.mtrpoint.compat.BrObserver;
 import java.util.*;
 
 public final class PointNetwork {
-    private static final SimpleChannel CHANNEL=NetworkRegistry.newSimpleChannel(new ResourceLocation(PointMod.ID,"appearance"),()->"2","2"::equals,"2"::equals);
+    private static final SimpleChannel CHANNEL=NetworkRegistry.newSimpleChannel(new ResourceLocation(PointMod.ID,"appearance"),()->"3","3"::equals,"3"::equals);
     public record Edit(String id,BlockPos center,long revision,String json) {}
     public record State(String dimension,boolean clear,String id,long revision,String json,String message) {}
     public record Movement(String node,String from,String to,boolean occupied,long vehicle,double distance) {}
@@ -37,7 +37,7 @@ public final class PointNetwork {
         if(!p.hasPermissions(2)&&!p.isCreative())message="mtrpoint.denied";
         else if(p.distanceToSqr(m.center.getX(),m.center.getY(),m.center.getZ())>4096||!level.hasChunkAt(m.center)||!level.mayInteract(p,m.center))message="mtrpoint.too_far";
         else if(old.revision()!=m.revision)message="mtrpoint.stale";
-        else if(!(m.id.startsWith("y:")||m.id.startsWith("x:"))||data.entries.size()>=4096&&!data.entries.containsKey(m.id))message="mtrpoint.invalid";
+        else if(!(m.id.startsWith("y:")||m.id.startsWith("t:")||m.id.startsWith("x:"))||data.entries.size()>=4096&&!data.entries.containsKey(m.id))message="mtrpoint.invalid";
         else try{var updated=new AppearanceData.Entry(AppearanceData.decode(m.json),old.revision()+1);data.entries.put(m.id,updated);data.setDirty();CHANNEL.send(PacketDistributor.DIMENSION.with(level::dimension),new State(level.dimension().location().toString(),false,m.id,updated.revision(),AppearanceData.JSON.toJson(updated.value()),"mtrpoint.saved"));return;}catch(RuntimeException ex){message="mtrpoint.invalid";}
         CHANNEL.send(PacketDistributor.PLAYER.with(()->p),new State(level.dimension().location().toString(),false,m.id,old.revision(),AppearanceData.JSON.toJson(old.value()),message));
     }

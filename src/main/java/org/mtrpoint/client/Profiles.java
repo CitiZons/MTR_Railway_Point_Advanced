@@ -65,6 +65,11 @@ public final class Profiles {
             Profile.Surface steel=Profile.STEEL,sleeper=Profile.TIMBER;
             double headTop=top,bestSleeperY=-Double.MAX_VALUE;
             var preserved=new Mesh();
+            boolean nativeModel=(id.equals("default_3d")||id.equals("default_3d_siding"))&&model.endsWith(".obj");
+            boolean siding=id.equals("default_3d_siding");
+            var railFaces=new ArrayList<Mesh.Quad>();var bearerFaces=new ArrayList<Mesh.Quad>();var fittings=new ArrayList<Mesh.Quad>();
+            double zMin=vertices.stream().mapToDouble(V3::z).min().orElse(-.3),zMax=vertices.stream().mapToDouble(V3::z).max().orElse(.3);
+            double halfBearer=vertices.stream().mapToDouble(v->Math.abs(v.x())).max().orElse(1.116023);
             for(int f=0;f<faces.size();f++){
                 int[] face=faces.get(f);double y=0,xmin=Double.MAX_VALUE,xmax=-Double.MAX_VALUE;float umin=1,vmin=1,umax=0,vmax=0;boolean hasUv=true;
                 for(int i=0;i<face.length;i+=2){V3 v=vertices.get(face[i]);y+=v.y()/(face.length/2);xmin=Math.min(xmin,v.x());xmax=Math.max(xmax,v.x());int ti=face[i+1];if(ti<0||ti>=uv.size()){hasUv=false;continue;}float[] tex=uv.get(ti);umin=Math.min(umin,tex[0]);umax=Math.max(umax,tex[0]);vmin=Math.min(vmin,tex[1]);vmax=Math.max(vmax,tex[1]);}
@@ -76,6 +81,20 @@ public final class Profiles {
                 double highest=-Double.MAX_VALUE,lowest=Double.MAX_VALUE;for(int k=0;k<face.length;k+=2){double yy=vertices.get(face[k]).y();highest=Math.max(highest,yy);lowest=Math.min(lowest,yy);}
                 if(y>headTop-.02&&highest-lowest<.005)steel=surface;
                 if(xmax-xmin>right-left&&y<headTop-.05&&y>-.03&&highest-lowest<.005&&y>bestSleeperY){sleeper=surface;bestSleeperY=y;}
+                if(nativeModel){
+                    double fzMin=Double.MAX_VALUE,fzMax=-Double.MAX_VALUE;
+                    for(int k=0;k<face.length;k+=2){double z=vertices.get(face[k]).z();fzMin=Math.min(fzMin,z);fzMax=Math.max(fzMax,z);}
+                    List<Mesh.Quad> target=null;
+                    if(xmin>.3&&fzMax-fzMin>(zMax-zMin)*.98&&lowest>.09)target=railFaces;
+                    else if(!siding&&highest<.098)target=bearerFaces;
+                    else if(xmin>.3&&fzMax-fzMin<(zMax-zMin)*.9)target=fittings;
+                    if(target!=null){
+                        int[] order=face.length==8?new int[]{0,2,4,6}:null;
+                        if(order!=null)target.add(template(face,order,vertices,uv,surface,access.point$flipV()));
+                        else for(int k=2;k+2<face.length;k+=2)target.add(template(face,new int[]{0,k,k+2,k+2},vertices,uv,surface,access.point$flipV()));
+                    }
+                    continue;
+                }
                 if(highest<-.005||lowest>top+.04||xmin>right+.65||xmax<left-.65){
                     V3 a=vertices.get(face[0]);for(int k=2;k+2<face.length;k+=2){V3 b=vertices.get(face[k]),c=vertices.get(face[k+2]);preserved.quad(a,b,c,c,surface,"attachment",-1);}
                 }
@@ -83,8 +102,13 @@ public final class Profiles {
             ATTACHMENTS.put(id,List.copyOf(preserved.quads));
             double base=vertices.stream().filter(v->v.y()>=0&&Math.abs(Math.abs(v.x())-right)<.12).mapToDouble(V3::y).min().orElse(top-.165);
             if(id.equals("default_3d_siding")&&sleeper==Profile.TIMBER)sleeper=new Profile.Surface("mtr_railway_point_advanced:textures/concrete.png",0,0,1,1,-1);
-            return new Adapted(new Profile(right-left-width,top+r.getModelYOffset(),width,Math.max(.12,width*2),Math.min(.25,Math.max(.08,top-base)),steel,sleeper,id,true),true,"mtrpoint.profile_inferred");
+            return new Adapted(new Profile(right-left-width,top+r.getModelYOffset(),width,Math.max(.12,width*2),Math.min(.25,Math.max(.08,top-base)),steel,sleeper,id,true,nativeModel?new ModelDetail(railFaces,bearerFaces,fittings,right,top,width,zMin,zMax,halfBearer,siding?.099422:.097111,siding):null),true,"mtrpoint.profile_inferred");
         }catch(Exception ex){return new Adapted(null,false,"mtrpoint.profile_manual");}
+    }
+    private static Mesh.Quad template(int[] face,int[] order,List<V3> vertices,List<float[]> uv,Profile.Surface surface,boolean flip){
+        var tex=new ArrayList<Float>();var points=new ArrayList<V3>();
+        for(int i:order){points.add(vertices.get(face[i]));float[] t=uv.get(face[i+1]);tex.add(t[0]);tex.add(flip?1-t[1]:t[1]);}
+        return new Mesh.Quad(points.get(0),points.get(1),points.get(2),points.get(3),surface,"template",-1,List.copyOf(tex));
     }
     private static double number(JsonObject o,String key,double fallback){return o.has(key)?o.get(key).getAsDouble():fallback;}
     private static boolean exists(String id){try{return Minecraft.getInstance().getResourceManager().getResource(new ResourceLocation(id)).isPresent();}catch(Exception ex){return false;}}

@@ -6,7 +6,7 @@ modId="mtr_railway_point_advanced"
 version="${version}"
 displayName="MTR Railway Point Advanced"
 authors="CitiZons"
-description='''Procedural Y turnouts and disconnected diamond crossings. Blueprint appearance editor; no routing or signalling changes.'''
+description='''Procedural Y and three-way turnouts, coordinated scissors crossovers and disconnected diamond crossings. Blueprint appearance editor; no routing or signalling changes.'''
 [[dependencies.mtr_railway_point_advanced]]
 modId="forge"
 mandatory=true
