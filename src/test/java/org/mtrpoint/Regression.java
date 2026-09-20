@@ -52,6 +52,7 @@ public final class Regression {
         Mesh t0=PointMesh.build(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,0),tm=PointMesh.build(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,.5),t1=PointMesh.build(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,1);
         require(t0.quads.size()==tm.quads.size()&&tm.quads.size()==t1.quads.size(),"Three-way animation topology");
         require(!t0.quads.equals(tm.quads)&&!tm.quads.equals(t1.quads),"Three distinct blade positions");
+        checkThreeWayStockContinuity(triple.get(0),t0);
         for(double position:new double[]{0,.25,.5,.75,1})require(PointMesh.build(y,moving,Profile.STANDARD,position).quads.size()==PointMesh.build(y,moving,Profile.STANDARD,0).quads.size(),"Stable movable frog topology");
         for(double position:new double[]{0,1}){
             Mesh heart=PointMesh.build(y,moving,Profile.STANDARD,position);
@@ -61,6 +62,9 @@ public final class Regression {
             require(contact<.003,"Movable heart point touches selected wing edge: "+contact);
         }
         require(left.quads.stream().filter(q->q.part().equals("wing")).count()>20,"Continuous wing rail assembly exists");
+        checkBladeContact(y);
+        checkSleeperEdits(y);
+        checkStockContinuity(y);
         for(int control=17;control<=23;control++)require(!PointMesh.build(y,PointSettings.DEFAULT.with(control,.1),Profile.STANDARD,0).quads.equals(left.quads),"Crossing control changes actual geometry: "+control);
         var ties=left.quads.stream().filter(q->q.part().equals("sleeper")&&q.index()==12).toList();
         for(Track branch:List.of(y.a(),y.b())){
@@ -74,6 +78,8 @@ public final class Regression {
         DiamondRegression.run();
         ReportedGeometryRegression.run();
         AssemblyRegression.run();
+        org.mtrpoint.client.PointRendererAssemblyRegression.run();
+        org.mtrpoint.client.CheckRailCompletenessRegression.run();
         FollowupRegression.run();
         require(PointSettings.DEFAULT.lengthScale()==.9,"Default coverage multiplier");
         for(double last:new double[]{3.19,8.05,12.87}){var rows=PointMesh.sleeperDistances(last,.6);require(Math.abs(rows.get(rows.size()-1)-last)<1e-9,"Last sleeper follows native phase");for(int i=1;i<rows.size();i++)require(rows.get(i)-rows.get(i-1)<=.60000001,"No long gap before final sleeper");}
@@ -95,7 +101,7 @@ export(t0,"three-left");export(tm,"three-center");export(t1,"three-right");
         Mesh crossing=new Mesh();crossing.quads.addAll(assembled.quads);
         for(var q:assembled.quads)for(V3 v:List.of(q.a(),q.b(),q.c(),q.d())){double d=v.sub(group.crossing().center()).dot(group.axis());require(d>=group.lo()-1e-7&&d<=group.hi()+1e-7,"Central mesh stays in its shared region");}
         for(var y:group.turnouts()){
-            Mesh a=group.clip(PointMesh.build(y,PointSettings.DEFAULT,Profile.STANDARD,0,group.boundary(y,PointSettings.DEFAULT)),y),b=group.clip(PointMesh.build(y,PointSettings.DEFAULT,Profile.STANDARD,1,group.boundary(y,PointSettings.DEFAULT)),y);
+            Mesh a=group.clip(PointMesh.build(y,PointSettings.DEFAULT,Profile.STANDARD,0,group.boundary(y,PointSettings.DEFAULT)),y,PointSettings.DEFAULT),b=group.clip(PointMesh.build(y,PointSettings.DEFAULT,Profile.STANDARD,1,group.boundary(y,PointSettings.DEFAULT)),y,PointSettings.DEFAULT);
             require(a.quads.size()==b.quads.size(),"Scissors clipping preserves blade animation topology");assembled.quads.addAll(a.quads);
         }
         DiamondRegression.scissors(group,crossing,assembled);
@@ -124,6 +130,54 @@ export(t0,"three-left");export(tm,"three-center");export(t1,"three-right");
             double expected=PointSettings.DEFAULT.flangeway()/cos;
             require(Math.abs(heart.get(0)[0]-wings.get(0)[1]-expected)<1e-6&&Math.abs(wings.get(1)[0]-heart.get(1)[1]-expected)<1e-6,"Wing flangeway stays constant until the terminal flare");
         }
+    }
+    private static void checkBladeContact(Junction j){
+        Profile p=Profile.STANDARD;PointSettings s=PointSettings.DEFAULT;double extent=PointMesh.extent(j,s),start=TurnoutFrame.start(j,extent),side=TurnoutFrame.side(j,extent);
+        FrogGeometry frog=new FrogGeometry(j,s,p,extent);double length=s.bladeLength()>0?s.bladeLength():Math.max(2,Math.min(((frog.sa+frog.sb)/2-start)*.65,9));
+        int planed=0,full=0;boolean restored=false;
+        for(double d=start;d<=start+length;d+=.05){
+            var blade=TurnoutFrame.blade(j.a(),j.b(),d,side,p.centerOffset(),p.headWidth(),0,start,length,s);double stockAt=j.b().nearest(j.a().at(d));
+            V3 stock=j.b().at(stockAt).add(j.b().tangent(stockAt).lateral().mul(side*p.centerOffset()));double separation=new V3(blade.point().x()-stock.x(),0,blade.point().z()-stock.z()).length();
+            if(blade.cut()!=null){planed++;require(separation<p.headWidth()+1e-4,"Blade planing continues outside stock contact");}
+            else {full++;restored=true;}
+            if(restored)require(blade.cut()==null,"Blade is planed again after reaching its full section");
+        }
+        require(planed>0&&full>planed,"Only the short stock-contact tip may be planed");
+        Mesh mesh=PointMesh.build(j,s,p,0);require(mesh.quads.stream().filter(q->q.part().equals("blade")).allMatch(q->List.of(q.a(),q.b(),q.c(),q.d()).stream().allMatch(v->Double.isFinite(v.x()+v.y()+v.z()))),"Planed blade mesh is finite");
+    }
+    private static void checkSleeperEdits(Junction j){
+        Profile p=Profile.STANDARD;PointSettings base=PointSettings.DEFAULT.with(16,0);
+        var path0=PointMesh.build(j,base.sleeperPath(0),p,0).quads.stream().filter(q->q.part().equals("sleeper")).toList();
+        var path1=PointMesh.build(j,base.sleeperPath(1),p,0).quads.stream().filter(q->q.part().equals("sleeper")).toList();
+        require(!path0.equals(path1),"Sleeper curve reference path changes bearer direction");
+        PointSettings added=base.sleeperPath(1).addSleeper(1,5.25);Mesh withAdded=PointMesh.build(j,added,p,0);
+        require(withAdded.quads.stream().anyMatch(q->q.index()>=256&&q.part().equals("sleeper")),"Manual sleeper is generated on the chosen path");
+        PointSettings deleted=added.removeSleeper(3);Mesh without=PointMesh.build(j,deleted,p,0);
+        require(without.quads.stream().noneMatch(q->q.index()==3&&(q.part().equals("sleeper")||q.part().equals("fastener"))),"Deleted automatic sleeper is absent");
+        PointSettings v=base.with(16,4),split=v.toggleSleeper(12,PointSettings.SLEEPER_SPLIT);
+        var joinedFaces=PointMesh.build(j,v,p,0).quads.stream().filter(q->q.index()==12&&q.part().equals("sleeper")).toList();
+        var splitFaces=PointMesh.build(j,split,p,0).quads.stream().filter(q->q.index()==12&&q.part().equals("sleeper")).toList();
+        require(!joinedFaces.equals(splitFaces),"Split replaces a joined V bearer with separate ordinary sleepers");
+        double ordinary=2*(p.centerOffset()+base.sleeperOverhang())+.02;
+        require(splitFaces.stream().flatMap(q->List.of(q.a().distance(q.b()),q.b().distance(q.c()),q.c().distance(q.d()),q.d().distance(q.a())).stream()).allMatch(length->length<=ordinary),"Split bearer arms do not bridge between routes");
+        PointSettings changed=base.with(4,.83).with(5,.31).with(6,.18).with(7,.61).with(14,12).with(15,-9).with(16,3).with(17,.2).flags(true,false).style("custom").sleeperPath(1).sleeper(2,.1).toggleSleeper(4,PointSettings.SLEEPER_FULL).addSleeper(1,6);
+        PointSettings reset=changed.resetSleepers();
+        require(reset.sleeperSpacing()==PointSettings.DEFAULT.sleeperSpacing()&&reset.sleeperWidth()==PointSettings.DEFAULT.sleeperWidth()&&reset.sleeperHeight()==PointSettings.DEFAULT.sleeperHeight()&&reset.sleeperOverhang()==PointSettings.DEFAULT.sleeperOverhang(),"Sleeper reset restores dimensions");
+        require(reset.sleeperAngle()==0&&reset.sleeperEndAngle()==0&&reset.sleeperMode()==PointSettings.DEFAULT.sleeperMode()&&reset.sleeperPath()==0&&reset.sleeperShifts().isEmpty()&&reset.sleeperOverrides().isEmpty()&&reset.addedSleepers().isEmpty(),"Sleeper reset clears arrangement and individual edits");
+        require(reset.guardShift()==changed.guardShift()&&reset.movableFrog()==changed.movableFrog()&&reset.enabled()==changed.enabled()&&reset.profileStyle().equals(changed.profileStyle()),"Sleeper reset preserves non-sleeper settings");
+        var automatic=GuardRails.forJunction(j,base,p);require(!automatic.isEmpty(),"Turnout exposes editable guards");var run=automatic.get(0);
+        PointSettings guarded=base.guard(0,new PointSettings.GuardEdit(run.start()+.1,run.end()-.1,false,true,"manual-test"));
+        var edited=GuardRails.forJunction(j,guarded,p).get(0);require(Math.abs(edited.start()-run.start()-.1)<1e-8&&Math.abs(edited.end()-run.end()+.1)<1e-8&&!edited.flareStart()&&edited.flareEnd()&&edited.mergeGroup().equals("manual-test"),"Manual guard stations and merge group are applied");
+        PointSettings decoded=org.mtrpoint.AppearanceData.decode(org.mtrpoint.AppearanceData.JSON.toJson(guarded));require(decoded.guardEdits().equals(guarded.guardEdits()),"Manual guard edits survive persistence");
+        require(guarded.resetSleepers().guardEdits().equals(guarded.guardEdits()),"Sleeper reset preserves manual guard edits");
+    }
+    private static void checkStockContinuity(Junction j){
+        Profile p=Profile.STANDARD;PointSettings s=PointSettings.DEFAULT;Mesh mesh=PointMesh.build(j,s,p,0);var tops=DiamondRegression.tops(mesh,p.top());double extent=PointMesh.extent(j,s),start=TurnoutFrame.start(j,extent),side=TurnoutFrame.side(j,extent),second=j.b().nearest(j.a().at(start));
+        for(double delta:new double[]{-.02,0,.02}){Track road=delta<=0?j.a():j.b();double at=delta<=0?Math.max(0,start+delta):Math.min(j.b().length,second+delta);V3 point=road.at(at).add(road.tangent(at).lateral().mul(side*p.centerOffset()));require(DiamondRegression.coverage(tops,point)>0,"Outer stock rail is open at the blade toe");}
+    }
+    private static void checkThreeWayStockContinuity(Junction j,Mesh mesh){
+        Profile p=Profile.STANDARD;var tops=DiamondRegression.tops(mesh,p.top());double start=TurnoutFrame.start(j,PointMesh.extent(j,PointSettings.DEFAULT));Track common=j.tracks().get(0),outer=j.tracks().get(2);double second=outer.nearest(common.at(start));
+        for(int sign:new int[]{-1,1})for(double delta:new double[]{-.02,0,.02}){Track road=delta<=0?common:outer;double at=delta<=0?Math.max(0,start+delta):Math.min(outer.length,second+delta);V3 point=road.at(at).add(road.tangent(at).lateral().mul(sign*p.centerOffset()));require(DiamondRegression.coverage(tops,point)>0,"Three-way outer stock rail is open at the blade toe");}
     }
     private static List<double[]> topSpans(Mesh mesh,double z,double top,String part){
         var spans=new ArrayList<double[]>();

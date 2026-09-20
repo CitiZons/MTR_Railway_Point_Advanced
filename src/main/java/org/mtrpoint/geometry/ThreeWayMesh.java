@@ -30,20 +30,22 @@ public final class ThreeWayMesh {
             for(var c:crossings){int local=c.a==branch?0:c.b==branch?1:-1;if(local>=0&&sign==(local==0?c.sign:-c.sign))cuts.add(new double[]{c.frog.toe(local),c.frog.heel(local)});}
             var distances=new TreeSet<Double>();distances.add(0D);distances.add(end);
             for(double d=.24;d<end;d+=.24)distances.add(d);
+            distances.add(Math.max(0,Math.min(end,bladeStart)));distances.add(Math.max(0,Math.min(end,bladeStart+blade)));
             for(var cut:cuts){distances.add(Math.max(0,Math.min(end,cut[0])));distances.add(Math.max(0,Math.min(end,cut[1])));}
             boolean moving=branch==1||(branch==0?sign==1:sign==-1);
             var ds=new ArrayList<>(distances);
             for(int i=1;i<ds.size();i++){
                 double a=ds.get(i-1),b=ds.get(i),mid=(a+b)/2;if(cuts.stream().anyMatch(c->mid>c[0]&&mid<c[1]))continue;
-                if(branch>0&&b<=bladeStart)continue;
-                V3 x=rail(road,a,sign,p),y=rail(road,b,sign,p);double wa=1,wb=1;
+                if(branch>0&&moving&&b<=bladeStart)continue;
+                V3 x=rail(road,a,sign,p),y=rail(road,b,sign,p);
                 if(moving&&b>bladeStart&&a<bladeStart+blade){
-                    wa=Math.max(.025,Math.min(1,(a-bladeStart)/blade));wb=Math.max(.025,Math.min(1,(b-bladeStart)/blade));
                     double open=Math.min(1,Math.abs(position-branch*.5)*2);
-                    x=TurnoutFrame.blade(road,a,sign,p.centerOffset(),open,bladeStart,blade,s);
-                    y=TurnoutFrame.blade(road,b,sign,p.centerOffset(),open,bladeStart,blade,s);
+                    Track stock=roads.get(branch+(sign>0?1:-1));
+                    var bladeA=TurnoutFrame.blade(road,stock,a,sign,p.centerOffset(),p.headWidth(),open,bladeStart,blade,s);
+                    var bladeB=TurnoutFrame.blade(road,stock,b,sign,p.centerOffset(),p.headWidth(),open,bladeStart,blade,s);
+                    m.blade(bladeA.point(),bladeB.point(),bladeA.cut(),bladeB.cut(),p,s);continue;
                 }
-                m.rail(x,y,wa,wb,p,s,moving&&b>bladeStart&&a<bladeStart+blade?"blade":"rail");
+                m.rail(x,y,1,1,p,s,"rail",new Mesh.RailTag(road,a,b,sign*p.centerOffset()));
             }
         }
         for(var c:crossings)c.frog.build(m,Math.max(0,Math.min(1,(position-c.a*.5)/((c.b-c.a)*.5))));
@@ -62,8 +64,8 @@ public final class ThreeWayMesh {
         }
         for(int pair=0;pair<2;pair++){
             int a=pair,b=pair+1;double at=bladeStart+Math.min(1.1+pair*.35,blade/3);V3 origin=roads.get(a).at(at),forward=roads.get(a).tangent(at);
-            V3 x=TurnoutFrame.contact(roads.get(a),at,1,p.centerOffset(),Math.min(1,Math.abs(position-a*.5)*2),bladeStart,blade,s,origin,forward);
-            V3 y=TurnoutFrame.contact(roads.get(b),roads.get(b).nearest(origin),-1,p.centerOffset(),Math.min(1,Math.abs(position-b*.5)*2),bladeStart,blade,s,origin,forward);
+            V3 x=TurnoutFrame.contact(roads.get(a),roads.get(b),at,1,p.centerOffset(),p.headWidth(),Math.min(1,Math.abs(position-a*.5)*2),bladeStart,blade,s,origin,forward);
+            V3 y=TurnoutFrame.contact(roads.get(b),roads.get(a),roads.get(b).nearest(origin),-1,p.centerOffset(),p.headWidth(),Math.min(1,Math.abs(position-b*.5)*2),bladeStart,blade,s,origin,forward);
             m.beam(x,y,.09,.09,p.top()+s.verticalOffset()-.07,p.top()+s.verticalOffset()-.03,p.steel(),"stretcher",-1);
         }
         double[] lasts={boundary.aLast(),boundary.thirdLast(),boundary.bLast()};int index=0;
@@ -79,6 +81,7 @@ public final class ThreeWayMesh {
             bearers(m,roads,centers,normals,distances,p,s,index++);
         }
         EndSleepers.finish(m,j,s,p,boundary);
+        SleeperEdits.finish(m,j,s,p);
         return m;
     }
     private static V3 rail(Track road,double d,double sign,Profile p){return road.at(d).add(road.tangent(d).lateral().mul(sign*p.centerOffset()));}
@@ -106,10 +109,10 @@ public final class ThreeWayMesh {
         for(int branch=0;branch<3;branch++){
             V3 c=centers.get(branch),n=normals.get(branch);double half=p.centerOffset()+s.sleeperOverhang();Mesh arm=new Mesh();
             double lo=-half,hi=half;
-            for(int adjacent:new int[]{branch-1,branch+1})if(adjacent>=0&&adjacent<3&&joints[Math.min(branch,adjacent)]!=null){double join=joints[Math.min(branch,adjacent)].sub(c).dot(n);lo=Math.min(lo,join-.4);hi=Math.max(hi,join+.4);}
+            if(!SleeperEdits.split(s,index))for(int adjacent:new int[]{branch-1,branch+1})if(adjacent>=0&&adjacent<3&&joints[Math.min(branch,adjacent)]!=null){double join=joints[Math.min(branch,adjacent)].sub(c).dot(n);lo=Math.min(lo,join-.4);hi=Math.max(hi,join+.4);}
             if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(arm,c,n,lo,hi,s,p,index);}
             else {double top=p.top()-p.railHeight()+s.verticalOffset();arm.beam(c.add(n.mul(lo)),c.add(n.mul(hi)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
-            for(int adjacent:new int[]{branch-1,branch+1})if(adjacent>=0&&adjacent<3&&joints[Math.min(branch,adjacent)]!=null){
+            if(!SleeperEdits.split(s,index)&&!SleeperEdits.full(s,index))for(int adjacent:new int[]{branch-1,branch+1})if(adjacent>=0&&adjacent<3&&joints[Math.min(branch,adjacent)]!=null){
                 V3 other=centers.get(adjacent),on=normals.get(adjacent),joint=joints[Math.min(branch,adjacent)];
                 V3 cut=n.add(on).unit();if(cut.dot(other.sub(c))<0)cut=cut.mul(-1);Mesh clipped=new Mesh();for(var q:arm.quads)Mesh.clip(clipped,q,joint,cut);arm=clipped;
             }

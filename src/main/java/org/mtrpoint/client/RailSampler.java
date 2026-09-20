@@ -65,7 +65,7 @@ public final class RailSampler {
         List<Sample> samples=roads.stream().map(t->SAMPLES.get(t.id)).filter(Objects::nonNull).toList();
         if(samples.stream().allMatch(v->v.banks.isEmpty()))return mesh;
         Mesh transformed=new Mesh();Map<V3,V3> cache=new HashMap<>();
-        for(var q:mesh.quads)transformed.quad(new Mesh.Quad(cache.computeIfAbsent(q.a(),p->bankPoint(p,samples)),cache.computeIfAbsent(q.b(),p->bankPoint(p,samples)),cache.computeIfAbsent(q.c(),p->bankPoint(p,samples)),cache.computeIfAbsent(q.d(),p->bankPoint(p,samples)),q.surface(),q.part(),q.index(),q.uv()));
+        for(var q:mesh.quads)transformed.quad(new Mesh.Quad(cache.computeIfAbsent(q.a(),p->bankPoint(p,samples)),cache.computeIfAbsent(q.b(),p->bankPoint(p,samples)),cache.computeIfAbsent(q.c(),p->bankPoint(p,samples)),cache.computeIfAbsent(q.d(),p->bankPoint(p,samples)),q.surface(),q.part(),q.index(),q.uv(),q.rail()));
         return transformed;
     }
     private static V3 bankPoint(V3 p,List<Sample> samples){

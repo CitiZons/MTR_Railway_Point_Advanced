@@ -29,6 +29,7 @@ tasks.register('regression', JavaExec) {
     mainClass = 'org.mtrpoint.Regression'
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(17) }
 }
+sourceSets { test { compileClasspath += sourceSets.main.output } }
 check.dependsOn regression
 sourceSets { smoke { compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output } }
 tasks.register('smokeJar', Jar) { archiveBaseName = 'point-runtime-probe'; from sourceSets.smoke.output; manifest { attributes 'MixinConfigs': 'point-probe.mixins.json' } }

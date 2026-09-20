@@ -13,12 +13,15 @@ import java.util.*;
 @Mod("point_runtime_probe")
 public final class RuntimeProbe {
     private boolean opened,worldStarted,worldReady;private static volatile boolean longMotionReceived;private int ticks,worldTicks;
-    private final boolean world=Boolean.getBoolean("pointProbeWorld");
+    private String sleeperEditId;private int sleeperEditIndex;private double sleeperEditValue;
+    private String panelEditId;private double panelEditValue;
+    private final boolean world=Boolean.getBoolean("pointProbeWorld"),existing=Boolean.getBoolean("pointProbeExisting");
     private java.util.List<org.mtr.core.data.Rail> rails;
     public static void observeMotion(org.mtrpoint.PointNetwork.Motion received){if(received.timestamp()==403101L)longMotionReceived=true;}
     public RuntimeProbe(){MinecraftForge.EVENT_BUS.addListener(this::tick);}
     private void tick(TickEvent.ClientTickEvent e){
         if(e.phase!=TickEvent.Phase.END)return;var mc=Minecraft.getInstance();
+        if(existing){if(mc.level!=null&&mc.player!=null)existingTick(mc);return;}
         if(world&&worldStarted){worldTick(mc);return;}
         if(!opened&&mc.screen instanceof TitleScreen&&mc.getOverlay()==null)try{
             Class.forName("org.mtr.mod.render.RenderRails");Class.forName("org.mtr.core.simulation.Simulator");Class.forName("org.mtr.core.data.Vehicle");Class.forName("org.mtr.mod.resource.RailResource");
@@ -143,11 +146,16 @@ public final class RuntimeProbe {
                 var points=(List<PointClient.View>)list.get(selector);if(points.size()<5)throw new AssertionError("Complex plan lost points");
                 var project=PointSelectionScreen.class.getDeclaredMethod("project",V3.class);project.setAccessible(true);
                 for(var point:points){double[] pixel=(double[])project.invoke(selector,PointClient.editCenter(point));if(pixel[0]<8||pixel[0]>selector.width-198||pixel[1]<65||pixel[1]>selector.height-45)throw new AssertionError("Initial plan hides marker");}
+                checkUnifiedEditor(mc);
                 String expected=points.get(selected.getInt(selector)).junction.id();selector.keyPressed(org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER,0,0);
                 if(!(mc.screen instanceof BlueprintScreen editor)||!editor.pointId().equals(expected))throw new AssertionError("Plan selected a different point");
                 click(mc,"mtrpoint.close");System.out.println("POINT_SELECTOR: PASS five scissors editors, Tab selection and Enter opens selected ID");
             }catch(ReflectiveOperationException ex){throw new AssertionError(ex);}
         }
+        if(worldTicks>=324&&worldTicks<334&&panelEditId!=null&&Math.abs(PointClient.saved(panelEditId).values()[11]-panelEditValue)<=1e-9&&PointClient.revision(panelEditId)>=1){
+            System.out.println("POINT_UNIFIED_SAVE: PASS per-turnout edit applied from the plan reached the server");panelEditId=null;
+        }
+        if(worldTicks==334&&panelEditId!=null)throw new AssertionError("Per-turnout save from the unified plan was not persisted within 12 client ticks");
         if(worldTicks==325)Screenshot.grab(mc.gameDirectory,"point-scissors-curved.png",mc.getMainRenderTarget(),m->{});
         if(worldTicks==327){var center=PointClient.views.stream().filter(v->v.junction.kind()==Junction.Kind.DIAMOND).findFirst().orElseThrow().junction.center();mc.getSingleplayerServer().execute(()->mc.getSingleplayerServer().getPlayerList().getPlayers().get(0).connection.teleport(center.x()+3,center.y()+7,center.z()-5,31,55));}
         if(worldTicks==338)Screenshot.grab(mc.gameDirectory,"point-crossing-close.png",mc.getMainRenderTarget(),m->{});
@@ -173,8 +181,14 @@ public final class RuntimeProbe {
             checkGuardCache();System.out.println("POINT_ASYMMETRIC: PASS actual MTR straight/curved branch, blueprint and wing detail");
         }
         if(worldTicks==393){checkGpu();checkPermission(mc);checkLanguages(mc);mc.setScreen(new PointSelectionScreen());}
+        if(worldTicks==395)editSleeper(mc);
         if(worldTicks==399)Screenshot.grab(mc.gameDirectory,"point-selection.png",mc.getMainRenderTarget(),m->{});
-        if(worldTicks==401){mc.screen.keyPressed(org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER,0,0);if(!(mc.screen instanceof BlueprintScreen))throw new AssertionError("Selector did not open explicit point");click(mc,"mtrpoint.tab_3");}
+        if(worldTicks==401){
+            double saved=PointClient.saved(sleeperEditId).sleeperShifts().getOrDefault(sleeperEditIndex,Double.NaN);
+            if(Math.abs(saved-sleeperEditValue)>1e-9)throw new AssertionError("Selector tie edit was not saved");
+            System.out.println("POINT_SLEEPER_EDITOR: PASS select, drag, preview and server save from area plan");
+            mc.screen.keyPressed(org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER,0,0);if(!(mc.screen instanceof BlueprintScreen))throw new AssertionError("Selector did not open explicit point");click(mc,"mtrpoint.tab_3");
+        }
         if(worldTicks==407)Screenshot.grab(mc.gameDirectory,"point-direct-tabs.png",mc.getMainRenderTarget(),m->{});
         if(worldTicks==410){language(mc,"ja_jp");mc.setScreen(new BlueprintScreen(PointClient.views.get(0)));click(mc,"mtrpoint.tab_2");}
         if(worldTicks==414)Screenshot.grab(mc.gameDirectory,"point-ui-ja.png",mc.getMainRenderTarget(),m->{});
@@ -340,10 +354,10 @@ public final class RuntimeProbe {
     private static void checkGpu(){
         try{
             Class<?> type=Class.forName("org.mtrpoint.client.PointGpu");var ctor=type.getDeclaredConstructor();ctor.setAccessible(true);Object gpu=ctor.newInstance();
-            var update=type.getDeclaredMethod("update",Mesh.class,double.class,boolean.class,boolean.class);update.setAccessible(true);
+            var update=type.getDeclaredMethod("update",Mesh.class,double.class,boolean.class,boolean.class,boolean.class);update.setAccessible(true);
             var close=type.getDeclaredMethod("close");close.setAccessible(true);var counter=type.getDeclaredField("uploads");counter.setAccessible(true);
-            Mesh mesh=PointClient.views.get(0).mesh();update.invoke(gpu,mesh,0D,false,false);long count=counter.getLong(null),begin=System.nanoTime();
-            for(int i=0;i<1000;i++)update.invoke(gpu,mesh,0D,false,false);
+            Mesh mesh=PointClient.views.get(0).mesh();update.invoke(gpu,mesh,0D,false,false,false);long count=counter.getLong(null),begin=System.nanoTime();
+            for(int i=0;i<1000;i++)update.invoke(gpu,mesh,0D,false,false,false);
             if(counter.getLong(null)!=count)throw new AssertionError("Stationary geometry re-uploaded every frame");
             System.out.println("POINT_GPU: PASS 1000 stationary updates="+(System.nanoTime()-begin)/1e6+" ms, GPU uploads=0");close.invoke(gpu);
         }catch(ReflectiveOperationException ex){throw new AssertionError(ex);}
@@ -353,18 +367,18 @@ public final class RuntimeProbe {
         var buffers=new ArrayList<Object>();
         try{
             Class<?> type=Class.forName("org.mtrpoint.client.PointGpu");var ctor=type.getDeclaredConstructor();ctor.setAccessible(true);
-            var update=type.getDeclaredMethod("update",Mesh.class,double.class,boolean.class,boolean.class);update.setAccessible(true);
+            var update=type.getDeclaredMethod("update",Mesh.class,double.class,boolean.class,boolean.class,boolean.class);update.setAccessible(true);
             var close=type.getDeclaredMethod("close");close.setAccessible(true);
             var draw=type.getDeclaredMethod("draw",List.class,org.joml.Matrix4f.class,org.joml.Matrix4f.class);draw.setAccessible(true);
             var fixed=type.getDeclaredField("fixed");fixed.setAccessible(true);var moving=type.getDeclaredField("moving");moving.setAccessible(true);
             var uploads=type.getDeclaredField("uploads");uploads.setAccessible(true);var vertices=type.getDeclaredField("vertices");vertices.setAccessible(true);
             Mesh mesh=PointClient.views.get(0).mesh();var pose=new org.joml.Matrix4f(com.mojang.blaze3d.systems.RenderSystem.getModelViewMatrix());var projection=com.mojang.blaze3d.systems.RenderSystem.getProjectionMatrix();
             try{
-                for(int i=0;i<32;i++){Object gpu=ctor.newInstance();buffers.add(gpu);update.invoke(gpu,mesh,0D,false,false);}
+                for(int i=0;i<32;i++){Object gpu=ctor.newInstance();buffers.add(gpu);update.invoke(gpu,mesh,0D,false,false,false);}
                 long count=uploads.getLong(null),vertexCount=vertices.getLong(null);var times=new double[30];
                 for(int frame=0;frame<35;frame++){
                     long begin=System.nanoTime();
-                    for(Object gpu:buffers){update.invoke(gpu,mesh,0D,false,false);draw.invoke(null,fixed.get(gpu),pose,projection);draw.invoke(null,moving.get(gpu),pose,projection);}
+                    for(Object gpu:buffers){update.invoke(gpu,mesh,0D,false,false,false);draw.invoke(null,fixed.get(gpu),pose,projection);draw.invoke(null,moving.get(gpu),pose,projection);}
                     if(frame>=5)times[frame-5]=(System.nanoTime()-begin)/1e6;
                 }
                 if(uploads.getLong(null)!=count||vertices.getLong(null)!=vertexCount)throw new AssertionError("Dense stationary draws uploaded vertices");
@@ -419,6 +433,7 @@ public final class RuntimeProbe {
         if(!view.profile.source().equals("default_3d")||count==view.mesh().quads.size())throw new AssertionError("Undo style/geometry");
         click(mc,"mtrpoint.tab_2");chooseSleeper(mc,0);
         if(view.settings.sleeperMode()!=0)throw new AssertionError("Parallel button");
+        checkSleeperControls(mc,view);
         click(mc,"mtrpoint.close");if(mc.screen!=null||!view.settings.equals(PointClient.saved(view.junction.id())))throw new AssertionError("Exit did not discard draft");
         // Geometry build count is independent of animation frames; use actual native model.
         view.preview(PointSettings.DEFAULT.flags(true,true));view.mesh();long builds=view.builds;
@@ -437,17 +452,185 @@ public final class RuntimeProbe {
         Arrays.sort(durations);System.out.println("POINT_UI_PERF: full siding blueprint CPU submit median="+durations[20]+" ms p95="+durations[38]+" ms (offscreen loop; not FPS)");
         System.out.println("POINT_UI: PASS style/undo/angle mode/explicit exit");
     }
-    private static void chooseSleeper(Minecraft mc,int mode){
-        var screen=(BlueprintScreen)mc.screen;
-        click(mc,"mtrpoint.sleeper_mode_4");
+    /**
+     * Drives the sleeper-mode list of whichever host owns a {@link TurnoutPanel}. The panel is shared
+     * by the isolated blueprint and the unified plan, and the currently selected turnout may carry any
+     * persisted mode, so the mode button is located by the host's own draft rather than a fixed label.
+     */
+    private void chooseSleeper(Minecraft mc,int mode){
+        var screen=mc.screen;
         try{
-            var x=BlueprintScreen.class.getDeclaredField("menuX");var y=BlueprintScreen.class.getDeclaredField("menuY");x.setAccessible(true);y.setAccessible(true);
-            var draft=BlueprintScreen.class.getDeclaredField("draft");draft.setAccessible(true);
-            if(((PointSettings)draft.get(screen)).sleeperMode()!=4)throw new AssertionError("Opening sleeper list changed mode");
-            ((net.minecraft.client.gui.screens.Screen)screen).mouseClicked(x.getInt(screen)+10,y.getInt(screen)+mode*22+10,0);
-            var flush=BlueprintScreen.class.getDeclaredMethod("flushPreview");flush.setAccessible(true);flush.invoke(screen);
-            if(((PointSettings)draft.get(screen)).sleeperMode()!=mode)throw new AssertionError("Sleeper list selection failed");
+            Object model=field(screen.getClass(),"panel",screen);
+            var x=TurnoutPanel.class.getDeclaredField("menuX");var y=TurnoutPanel.class.getDeclaredField("menuY");x.setAccessible(true);y.setAccessible(true);
+            var draft=method(screen.getClass(),"draft",String.class);var junction=method(screen.getClass(),"junction");
+            Object view=junction.invoke(screen);String id=(String)view.getClass().getField("junction").get(view).getClass().getMethod("id").invoke(view.getClass().getField("junction").get(view));
+            int currentMode=((PointSettings)draft.invoke(screen,id)).sleeperMode();
+            click(mc,net.minecraft.network.chat.Component.translatable("mtrpoint.sleeper_mode_"+currentMode).getString());
+            if(((PointSettings)draft.invoke(screen,id)).sleeperMode()!=currentMode)throw new AssertionError("Opening sleeper list changed mode");
+            double scale=screenScale(screen);((net.minecraft.client.gui.screens.Screen)screen).mouseClicked((x.getInt(model)+10)*scale,(y.getInt(model)+mode*22+10)*scale,0);
+            if(((PointSettings)draft.invoke(screen,id)).sleeperMode()!=mode)throw new AssertionError("Sleeper list selection failed");
         }catch(ReflectiveOperationException e){throw new AssertionError(e);}
+    }
+
+    /**
+     * Milestone 1 of the unified editor: the plan assembles the full preview, clicking a turnout
+     * selects it in place, the per-turnout panel edits that junction without navigating away, the
+     * number toggle flips its label, and the shared save applies the turnout that is selected when
+     * it is clicked - the product contract is per-selected-turnout persistence, not save-all.
+     */
+    private void checkUnifiedEditor(Minecraft mc){
+        try{
+            var selector=(PointSelectionScreen)mc.screen;
+            var points=(List<PointClient.View>)field(PointSelectionScreen.class,"points",selector);
+            var drafts=(Map<PointClient.View,PointSettings>)field(PointSelectionScreen.class,"drafts",selector);
+            var panel=(TurnoutPanel)field(PointSelectionScreen.class,"panel",selector);
+            var plan=(Mesh)field(PointSelectionScreen.class,"plan",selector);
+            int selected=(Integer)field(PointSelectionScreen.class,"selected",selector);
+            var view=points.get(selected);
+            int before=((net.minecraft.client.gui.screens.Screen)selector).children().size();
+            if(panel.view()!=view)throw new AssertionError("Plan panel is not bound to the selected turnout");
+            if(drafts.get(view)!=view.settings)throw new AssertionError("Plan opened a divergent draft");
+            for(String part:List.of("rail","guard","wing","blade","frog","sleeper"))if(plan.quads.stream().noneMatch(q->q.part().equals(part)))throw new AssertionError("Unified plan omitted "+part+" geometry");
+            for(String key:List.of("mtrpoint.guard_start_minus","mtrpoint.guard_start_plus","mtrpoint.guard_end_minus","mtrpoint.guard_end_plus","mtrpoint.guard_merge","mtrpoint.guard_reset"))if(buttonCount(mc,net.minecraft.network.chat.Component.translatable(key).getString())!=1)throw new AssertionError("Missing guard editor action "+key);
+            if(buttonCount(mc,net.minecraft.network.chat.Component.translatable("mtrpoint.apply").getString())!=1)
+                throw new AssertionError("Unified plan must expose exactly one per-turnout save button");
+            clickMessage(mc,net.minecraft.network.chat.Component.translatable("mtrpoint.tab_2").getString());
+            chooseSleeper(mc,0);
+            chooseSleeper(mc,4);
+            clickMessage(mc,net.minecraft.network.chat.Component.translatable("mtrpoint.tab_0").getString());
+            fieldOf(mc,"height","0.02");
+            if(panel.view()!=view||drafts.get(view).values()[11]!=.02)throw new AssertionError("Fine control did not reach the selected junction draft");
+            panelEditId=view.junction.id();panelEditValue=.02;
+            // Per-selected-turnout save: hand the edited turnout to the server while it is still the
+            // selection, because the panel button acts on the current view. Doing this only after
+            // switching to the peer would save the peer and silently drop this draft.
+            click(mc,"mtrpoint.apply");
+            String expectHide=net.minecraft.network.chat.Component.translatable("mtrpoint.numbers_hide").getString();
+            String expectShow=net.minecraft.network.chat.Component.translatable("mtrpoint.numbers_show").getString();
+            if(!expectHide.equals("隐藏编号")||!expectShow.equals("显示编号"))throw new AssertionError("Number toggle is not Chinese in the default language");
+            if(!(Boolean)field(PointSelectionScreen.class,"numbersVisible",selector))throw new AssertionError("Numbers must default to visible");
+            clickMessage(mc,expectHide);
+            if((Boolean)field(PointSelectionScreen.class,"numbersVisible",selector))throw new AssertionError("Hide numbers did not hide them");
+            if(buttonCount(mc,expectHide)!=0||buttonCount(mc,expectShow)!=1)throw new AssertionError("Number toggle label did not flip");
+            clickMessage(mc,expectShow);
+            if(!(Boolean)field(PointSelectionScreen.class,"numbersVisible",selector))throw new AssertionError("Show numbers did not restore them");
+            clickMessage(mc,expectHide);
+            int peer=selected==0?1:0;var other=points.get(peer);
+            double[] pixel=(double[])method(PointSelectionScreen.class,"project",V3.class).invoke(selector,PointClient.editCenter(other));
+            double scale=screenScale(selector);
+            ((net.minecraft.client.gui.screens.Screen)selector).mouseClicked(pixel[0]*scale,pixel[1]*scale,0);
+            if(mc.screen!=selector)throw new AssertionError("Clicking a turnout navigated away from the plan");
+            if((Integer)field(PointSelectionScreen.class,"selected",selector)!=peer)throw new AssertionError("Clicking a turnout did not select it in place");
+            if(panel.view()!=other)throw new AssertionError("Per-turnout panel did not follow the in-place selection");
+            if((Boolean)field(PointSelectionScreen.class,"numbersVisible",selector))throw new AssertionError("Hidden numbers came back without the toggle");
+            if(((net.minecraft.client.gui.screens.Screen)selector).children().size()!=before)throw new AssertionError("Per-turnout controls appeared without the selected turnout");
+            if(drafts.get(view).values()[11]!=.02||drafts.get(other)!=other.settings)throw new AssertionError("In-place selection disturbed the assembled preview drafts");
+            // The shared save acts on the current selection only: the turnout that was edited is the
+            // one pending server acknowledgement, and merely selecting the peer must not queue it.
+            var dirty=(Set<PointClient.View>)field(PointSelectionScreen.class,"dirty",selector);
+            if(!dirty.contains(view))throw new AssertionError("The saved turnout is no longer pending server acknowledgement");
+            if(dirty.contains(other))throw new AssertionError("Selecting the peer turnout queued it for the shared save");
+            System.out.println("POINT_UNIFIED: PASS full assembly preview, in-place selection, per-selected-turnout save, shared controls and number toggle");
+        }catch(ReflectiveOperationException ex){throw new AssertionError(ex);}
+    }
+    private static Object field(Class<?> type,String name,Object owner)throws ReflectiveOperationException{
+        var declared=type.getDeclaredField(name);declared.setAccessible(true);return declared.get(owner);
+    }
+    private static java.lang.reflect.Method method(Class<?> type,String name,Class<?>... parameters)throws ReflectiveOperationException{
+        var declared=type.getDeclaredMethod(name,parameters);declared.setAccessible(true);return declared;
+    }
+    private static int buttonCount(Minecraft mc,String message){
+        return (int)mc.screen.children().stream().filter(w->w instanceof net.minecraft.client.gui.components.Button b&&b.getMessage().getString().equals(message)).count();
+    }
+    private static void fieldOf(Minecraft mc,String key,String value){
+        String label=net.minecraft.network.chat.Component.translatable("mtrpoint."+key).getString();
+        var box=mc.screen.children().stream().filter(w->w instanceof net.minecraft.client.gui.components.EditBox b&&b.getMessage().getString().equals(label)).map(w->(net.minecraft.client.gui.components.EditBox)w).findFirst().orElseThrow();
+        box.setValue(value);
+    }
+    private void existingTick(Minecraft mc){
+        if(++worldTicks==30){PointClient.invalidate();PointClient.rebuild();System.out.println("POINT_ACTUAL: views="+PointClient.views.size());
+            for(var view:PointClient.views){var c=view.junction.center();System.out.println("POINT_ACTUAL_VIEW: "+view.junction.kind()+" id="+view.junction.id()+" center="+c+" tracks="+view.junction.tracks().stream().map(t->t.id).toList()+" mesh="+view.mesh().quads.size());}
+              PointRenderer.prepare(PointClient.views);mc.options.hideGui=true;
+              mc.getSingleplayerServer().execute(()->{var player=mc.getSingleplayerServer().getPlayerList().getPlayers().get(0);player.getAbilities().flying=true;player.onUpdateAbilities();player.connection.teleport(49.686,-55.887,-12.642,0,45);});
+          }
+        if(worldTicks==55)Screenshot.grab(mc.gameDirectory,"point-actual-v0.png",mc.getMainRenderTarget(),m->System.out.println("POINT_ACTUAL: v0 screenshot"));
+        if(worldTicks==60)mc.getSingleplayerServer().execute(()->mc.getSingleplayerServer().getPlayerList().getPlayers().get(0).connection.teleport(49.686,-55.887,-12.642,90,45));
+        if(worldTicks==75)Screenshot.grab(mc.gameDirectory,"point-actual-v1.png",mc.getMainRenderTarget(),m->System.out.println("POINT_ACTUAL: v1 screenshot"));
+        if(worldTicks==80)mc.getSingleplayerServer().execute(()->mc.getSingleplayerServer().getPlayerList().getPlayers().get(0).connection.teleport(49.686,-55.887,-12.642,180,45));
+        if(worldTicks==95)Screenshot.grab(mc.gameDirectory,"point-actual-v2.png",mc.getMainRenderTarget(),m->System.out.println("POINT_ACTUAL: v2 screenshot"));
+        if(worldTicks==100)mc.getSingleplayerServer().execute(()->mc.getSingleplayerServer().getPlayerList().getPlayers().get(0).connection.teleport(49.686,-55.887,-12.642,270,45));
+        if(worldTicks==115)Screenshot.grab(mc.gameDirectory,"point-actual-v3.png",mc.getMainRenderTarget(),m->System.out.println("POINT_ACTUAL: v3 screenshot"));
+        if(worldTicks==120)mc.getSingleplayerServer().execute(()->mc.getSingleplayerServer().getPlayerList().getPlayers().get(0).connection.teleport(50,-56.5,-4.5,90,55));
+        if(worldTicks==140)Screenshot.grab(mc.gameDirectory,"point-actual-close-0.png",mc.getMainRenderTarget(),m->System.out.println("POINT_ACTUAL: close 0 screenshot"));
+        if(worldTicks==145)mc.getSingleplayerServer().execute(()->mc.getSingleplayerServer().getPlayerList().getPlayers().get(0).connection.teleport(52,-56.5,0,90,55));
+        if(worldTicks==165)Screenshot.grab(mc.gameDirectory,"point-actual-close-1.png",mc.getMainRenderTarget(),m->System.out.println("POINT_ACTUAL: close 1 screenshot"));
+        if(worldTicks==170)mc.getSingleplayerServer().execute(()->mc.getSingleplayerServer().getPlayerList().getPlayers().get(0).connection.teleport(50,-56.5,-8,270,55));
+        if(worldTicks==190)Screenshot.grab(mc.gameDirectory,"point-actual-close-2.png",mc.getMainRenderTarget(),m->System.out.println("POINT_ACTUAL: close 2 screenshot"));
+        if(worldTicks==195)mc.getSingleplayerServer().execute(()->mc.getSingleplayerServer().getPlayerList().getPlayers().get(0).connection.teleport(52,-53,-4.5,0,90));
+        if(worldTicks==215)Screenshot.grab(mc.gameDirectory,"point-actual-close-top.png",mc.getMainRenderTarget(),m->System.out.println("POINT_ACTUAL: close top screenshot"));
+        if(worldTicks==230){System.out.println("POINT_ACTUAL: PASS");mc.stop();}
+    }
+    private void editSleeper(Minecraft mc){
+        try{
+            var selector=(PointSelectionScreen)mc.screen;var sleepersField=PointSelectionScreen.class.getDeclaredField("sleepers");sleepersField.setAccessible(true);
+            Object pick=((List<?>)sleepersField.get(selector)).get(0);var centerMethod=pick.getClass().getDeclaredMethod("center");centerMethod.setAccessible(true);V3 center=(V3)centerMethod.invoke(pick);
+            var handleMethod=pick.getClass().getDeclaredMethod("handle");handleMethod.setAccessible(true);Object handle=handleMethod.invoke(pick);var facesMethod=handle.getClass().getDeclaredMethod("faces");facesMethod.setAccessible(true);
+            var project=PointSelectionScreen.class.getDeclaredMethod("project",V3.class);project.setAccessible(true);double[] middle=(double[])project.invoke(selector,center),pixel=middle;V3 pixelWorld=center;double far=-1;
+            for(var face:(List<Mesh.Quad>)facesMethod.invoke(handle))for(V3 vertex:List.of(face.a(),face.b(),face.c(),face.d())){double[] candidate=(double[])project.invoke(selector,vertex);double distance=Math.hypot(candidate[0]-middle[0],candidate[1]-middle[1]);if(distance>far){far=distance;pixel=candidate;pixelWorld=vertex;}}
+            double scale=screenScale(selector);((net.minecraft.client.gui.screens.Screen)selector).mouseScrolled(pixel[0]*scale,pixel[1]*scale,1);double[] anchored=(double[])project.invoke(selector,pixelWorld);
+            if(Math.hypot(anchored[0]-pixel[0],anchored[1]-pixel[1])>.001)throw new AssertionError("Selector zoom is not anchored at the mouse");pixel=anchored;
+            ((net.minecraft.client.gui.screens.Screen)selector).mouseClicked(pixel[0]*scale,pixel[1]*scale,0);
+            var viewField=PointSelectionScreen.class.getDeclaredField("sleeperView");viewField.setAccessible(true);var indexField=PointSelectionScreen.class.getDeclaredField("sleeperIndex");indexField.setAccessible(true);
+            var view=(PointClient.View)viewField.get(selector);if(view==null)throw new AssertionError("Selector could not select a sleeper from its far end");int index=indexField.getInt(selector);double before=view.settings.sleeperShifts().getOrDefault(index,0D);List<Track> roads=view.scissors==null?view.junction.tracks():view.scissors.tracks();Track road=roads.stream().min(Comparator.comparingDouble(v->v.at(v.nearest(center)).distance(center))).orElseThrow();V3 tangent=road.tangent(road.nearest(center));double dx=tangent.x()*20,dy=tangent.z()*20;
+            ((net.minecraft.client.gui.screens.Screen)selector).mouseDragged((pixel[0]+dx)*scale,(pixel[1]+dy)*scale,0,dx*scale,dy*scale);double value=view.settings.sleeperShifts().getOrDefault(index,0D);if(Math.abs(value-before)<1e-9)throw new AssertionError("Selector tie drag did not change preview");
+            click(mc,"mtrpoint.undo");if(Math.abs(view.settings.sleeperShifts().getOrDefault(index,0D)-before)>1e-9)throw new AssertionError("Selector tie undo did not restore preview");
+            ((net.minecraft.client.gui.screens.Screen)selector).mouseDragged((pixel[0]+dx)*scale,(pixel[1]+dy)*scale,0,dx*scale,dy*scale);value=view.settings.sleeperShifts().getOrDefault(index,0D);if(Math.abs(value-before)<1e-9)throw new AssertionError("Selector tie drag failed after undo");
+            sleeperEditId=view.junction.id();sleeperEditIndex=index;sleeperEditValue=value;click(mc,"mtrpoint.select_save_sleeper");
+        }catch(ReflectiveOperationException ex){throw new AssertionError(ex);}
+    }
+    private static void checkSleeperControls(Minecraft mc,PointClient.View view){
+        try{
+            var screen=(BlueprintScreen)mc.screen;var draftField=BlueprintScreen.class.getDeclaredField("draft");draftField.setAccessible(true);
+            clickMessage(mc,net.minecraft.network.chat.Component.translatable("mtrpoint.sleeper_path",1).getString());
+            PointSettings draft=(PointSettings)draftField.get(screen);if(draft.sleeperPath()!=1)throw new AssertionError("Sleeper reference path did not change");
+            var prepare=BlueprintScreen.class.getDeclaredMethod("prepareProjection");prepare.setAccessible(true);prepare.invoke(screen);var project=BlueprintScreen.class.getDeclaredMethod("project",V3.class);project.setAccessible(true);
+            double[] firstPixel=(double[])project.invoke(screen,sleeperCenter(view.mesh(),-1));clickVirtual(screen,firstPixel[0],firstPixel[1]);sleeperAction(screen,0);
+            Track road=view.junction.tracks().get(1);double[] at=(double[])project.invoke(screen,road.at(Math.min(5,road.length)));clickVirtual(screen,at[0],at[1]);
+            draft=(PointSettings)draftField.get(screen);if(draft.addedSleepers().size()!=1||!draft.addedSleepers().containsKey(256))throw new AssertionError("Manual sleeper was not added");
+            for(int item:new int[]{3,4}){openSleeperMenu(screen,256);sleeperAction(screen,item);}
+            draft=(PointSettings)draftField.get(screen);if(!draft.sleeper(256,PointSettings.SLEEPER_SPLIT)||!draft.sleeper(256,PointSettings.SLEEPER_FULL))throw new AssertionError("Individual sleeper split/full controls failed: "+draft.sleeperOverrides());
+            openSleeperMenu(screen,256);sleeperAction(screen,2);draft=(PointSettings)draftField.get(screen);if(!draft.addedSleepers().isEmpty())throw new AssertionError("Manual sleeper delete failed");
+            click(mc,"mtrpoint.undo");draft=(PointSettings)draftField.get(screen);if(!draft.addedSleepers().containsKey(256))throw new AssertionError("Manual sleeper delete cannot be undone");
+            openSleeperMenu(screen,256);sleeperAction(screen,1);draft=(PointSettings)draftField.get(screen);if(draft.sleeperPath()!=0||!draft.addedSleepers().isEmpty()||!draft.sleeperOverrides().isEmpty())throw new AssertionError("Sleeper-only reset retained individual edits");
+        }catch(ReflectiveOperationException ex){throw new AssertionError(ex);}
+    }
+    private static void sleeperAction(net.minecraft.client.gui.screens.Screen screen,int item)throws ReflectiveOperationException{
+        TurnoutPanel panel=panelOf(screen);
+        var x=TurnoutPanel.class.getDeclaredField("actionX");var y=TurnoutPanel.class.getDeclaredField("actionY");x.setAccessible(true);y.setAccessible(true);double scale=screenScale(screen);
+        screen.mouseClicked((x.getInt(panel)+64)*scale,(y.getInt(panel)+item*22+(item>=2?2:0)+10)*scale,0);
+        flushPreview(screen);
+    }
+    private static void openSleeperMenu(net.minecraft.client.gui.screens.Screen screen,int index)throws ReflectiveOperationException{
+        TurnoutPanel panel=panelOf(screen);
+        var selected=TurnoutPanel.class.getDeclaredField("selectedSleeper");var open=TurnoutPanel.class.getDeclaredField("actionMenu");var x=TurnoutPanel.class.getDeclaredField("actionX");var y=TurnoutPanel.class.getDeclaredField("actionY");
+        selected.setAccessible(true);open.setAccessible(true);x.setAccessible(true);y.setAccessible(true);selected.setInt(panel,index);open.setBoolean(panel,true);x.setInt(panel,16);y.setInt(panel,80);
+    }
+    /** The popup state lives in the shared {@link TurnoutPanel}; every host keeps its own instance
+     * in a private "panel" field, so both BlueprintScreen and PointSelectionScreen resolve here. */
+    private static TurnoutPanel panelOf(net.minecraft.client.gui.screens.Screen screen)throws ReflectiveOperationException{
+        return (TurnoutPanel)field(screen.getClass(),"panel",screen);
+    }
+    /** Only the isolated blueprint debounces typing through a flush; the unified plan previews
+     * synchronously in {@link PointSelectionScreen#changeDraft}, so a host without one is already flushed. */
+    private static void flushPreview(net.minecraft.client.gui.screens.Screen screen)throws ReflectiveOperationException{
+        try{method(screen.getClass(),"flushPreview").invoke(screen);}catch(NoSuchMethodException ignored){}
+    }
+    private static void clickVirtual(net.minecraft.client.gui.screens.Screen screen,double x,double y){double scale=screenScale(screen);screen.mouseClicked(x*scale,y*scale,0);screen.mouseReleased(x*scale,y*scale,0);}
+    private static V3 sleeperCenter(Mesh mesh,int requested){
+        int index=requested<0?mesh.quads.stream().filter(q->q.index()>=0&&q.part().equals("sleeper")).mapToInt(Mesh.Quad::index).min().orElseThrow():requested;V3 sum=new V3(0,0,0);int count=0;
+        if(requested>=0)for(var q:mesh.quads)if(q.index()==index&&q.part().equals("sleeper")&&Math.abs(q.a().y()-q.b().y())<1e-8&&Math.abs(q.a().y()-q.c().y())<1e-8&&Math.abs(q.a().y()-q.d().y())<1e-8)return q.center();
+        for(var q:mesh.quads)if(q.index()==index&&(q.part().equals("sleeper")||q.part().equals("fastener")))for(V3 v:List.of(q.a(),q.b(),q.c(),q.d())){sum=sum.add(v);count++;}
+        if(count==0)throw new AssertionError("Missing sleeper "+index);return sum.mul(1D/count);
     }
     private static void checkPartitionCache(){
         try{
@@ -470,9 +653,15 @@ public final class RuntimeProbe {
     }
     private static void click(Minecraft mc,String key){
         String text=net.minecraft.network.chat.Component.translatable(key).getString();
-        var button=mc.screen.children().stream().filter(w->w instanceof net.minecraft.client.gui.components.Button b&&b.getMessage().getString().equals(text)).map(w->(net.minecraft.client.gui.components.Button)w).findFirst().orElseThrow(()->new AssertionError("Missing button "+key));
-        mc.screen.mouseClicked(button.getX()+button.getWidth()/2D,button.getY()+10,0);if(mc.screen!=null)mc.screen.mouseReleased(button.getX()+5,button.getY()+5,0);
-        if(mc.screen instanceof BlueprintScreen)try{var flush=BlueprintScreen.class.getDeclaredMethod("flushPreview");flush.setAccessible(true);flush.invoke(mc.screen);}catch(ReflectiveOperationException ex){throw new AssertionError(ex);}
+        clickMessage(mc,text);
+    }
+    private static void clickMessage(Minecraft mc,String text){
+        var button=mc.screen.children().stream().filter(w->w instanceof net.minecraft.client.gui.components.Button b&&b.getMessage().getString().equals(text)).map(w->(net.minecraft.client.gui.components.Button)w).findFirst().orElseThrow(()->new AssertionError("Missing button "+text));
+        double scale=screenScale(mc.screen);mc.screen.mouseClicked((button.getX()+button.getWidth()/2D)*scale,(button.getY()+10)*scale,0);if(mc.screen!=null)mc.screen.mouseReleased((button.getX()+5)*scale,(button.getY()+5)*scale,0);
+        if(mc.screen!=null)try{flushPreview(mc.screen);}catch(ReflectiveOperationException ex){throw new AssertionError(ex);}
+    }
+    private static double screenScale(net.minecraft.client.gui.screens.Screen screen){
+        try{var field=screen.getClass().getDeclaredField("uiScale");field.setAccessible(true);return field.getDouble(screen);}catch(ReflectiveOperationException ignored){return 1;}
     }
     private static org.mtrpoint.PointNetwork.Motion longMotion(){
         String from=org.mtr.core.data.TwoPositionsBase.getHexId(new org.mtr.core.data.Position(-30000000,-64,30000000),new org.mtr.core.data.Position(-29999999,320,29999999));

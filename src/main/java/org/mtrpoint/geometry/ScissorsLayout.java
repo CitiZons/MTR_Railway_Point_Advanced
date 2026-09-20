@@ -74,16 +74,20 @@ public record ScissorsLayout(Junction crossing,List<Junction> turnouts,List<Trac
         // that plane at a different distance from the track centre on a curved road.
         double a=end(j,j.a()),b=end(j,j.b());return new PointMesh.YBoundary(Math.min(j.a().length,a+1),Math.min(j.b().length,b+1),Math.max(0,a-s.sleeperSpacing()/2),Math.max(0,b-s.sleeperSpacing()/2));
     }
-    public Mesh clip(Mesh source,Junction owner){
+    public Mesh clip(Mesh source,Junction owner,PointSettings settings){
         Mesh result=new Mesh();
         if(owner.kind()!=Junction.Kind.DIAMOND){
             boolean before=owner.center().sub(crossing.center()).dot(axis)<0;V3 at=crossing.center().add(axis.mul(before?lo:hi)),normal=before?axis:axis.mul(-1);
-            for(var q:source.quads)Mesh.clip(result,q,at,normal);
+            for(var q:source.quads)if(q.index()>=0&&SleeperEdits.full(settings,q.index())&&(q.part().equals("sleeper")||q.part().equals("fastener")))result.quad(q);else clip(result,q,at,normal,q.part().equals("blade")||settings.movableFrog()&&q.part().equals("frog"));
         }else{
-            Mesh first=new Mesh();for(var q:source.quads)Mesh.clip(first,q,crossing.center().add(axis.mul(hi)),axis);
-            for(var q:first.quads)Mesh.clip(result,q,crossing.center().add(axis.mul(lo)),axis.mul(-1));
+            Mesh first=new Mesh();for(var q:source.quads)if(q.index()>=0&&SleeperEdits.full(settings,q.index())&&(q.part().equals("sleeper")||q.part().equals("fastener")))first.quad(q);else Mesh.clip(first,q,crossing.center().add(axis.mul(hi)),axis);
+            for(var q:first.quads)if(q.index()>=0&&SleeperEdits.full(settings,q.index())&&(q.part().equals("sleeper")||q.part().equals("fastener")))result.quad(q);else Mesh.clip(result,q,crossing.center().add(axis.mul(lo)),axis.mul(-1));
         }
         return result;
+    }
+    private static void clip(Mesh out,Mesh.Quad q,V3 origin,V3 normal,boolean animated){
+        if(!animated){Mesh.clip(out,q,origin,normal);return;}
+        Mesh one=new Mesh();one.quad(q);out.quads.addAll(Mesh.clipAnimated(one,origin,normal).quads);
     }
     public Mesh centerMesh(PointSettings settings,Profile raw){
         Profile p=raw.tune(settings);Mesh mesh=new Mesh();if(!settings.enabled())return mesh;
@@ -94,7 +98,7 @@ public record ScissorsLayout(Junction crossing,List<Junction> turnouts,List<Trac
         for(double local:PointMesh.sleeperDistances(Math.max(0,length-settings.sleeperSpacing()/2),settings.sleeperSpacing())){
             double along=lo+local+settings.sleeperShifts().getOrDefault(index,0D);V3 target=crossing.center().add(axis.mul(along));
             Track a=through.get(0),b=through.get(1);double da=a.nearest(target),db=b.nearest(target);V3 center=a.at(da).lerp(b.at(db),.5);
-            V3 forward=a.tangent(da),other=b.tangent(db);if(forward.dot(other)<0)other=other.mul(-1);forward=forward.add(other).unit();if(forward.dot(axis)<0)forward=forward.mul(-1);
+            Track reference=SleeperEdits.path(tracks,settings.sleeperPath());double referenceAt=reference.nearest(target);V3 forward=reference.tangent(referenceAt);if(forward.dot(axis)<0)forward=forward.mul(-1);
             double angle=Math.toRadians(settings.sleeperAngle()+(settings.sleeperEndAngle()-settings.sleeperAngle())*local/Math.max(.001,length));
             V3 n=forward.lateral();n=new V3(n.x()*Math.cos(angle)-n.z()*Math.sin(angle),0,n.x()*Math.sin(angle)+n.z()*Math.cos(angle));forward=new V3(n.z(),0,-n.x());
             var seats=new ArrayList<V3>();double min=Double.MAX_VALUE,max=-Double.MAX_VALUE;
@@ -104,13 +108,21 @@ public record ScissorsLayout(Junction crossing,List<Junction> turnouts,List<Trac
                 V3 seat=road.at(d).add(road.tangent(d).lateral().mul(sign*p.centerOffset()));if(seats.stream().noneMatch(v->v.distance(seat)<.18))seats.add(seat);
                 double side=seat.sub(center).dot(n);min=Math.min(min,side-settings.sleeperOverhang());max=Math.max(max,side+settings.sleeperOverhang());
             }
-            if(settings.sleeperMode()==4){
+            if(SleeperEdits.split(settings,index)){
+                for(Track road:tracks)ordinary(mesh,road,road.nearest(center),settings,p,index);
+            }else if(settings.sleeperMode()==4){
                 VSleepers.across(mesh,tracks,center,axis,angle,settings,p,index);
             }
             else if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(mesh,center,n,min,max,settings,p,index);for(V3 seat:seats)p.detail().fitting(mesh,seat,n,settings,p,index);}
             else {double top=p.top()-p.railHeight()+settings.verticalOffset();mesh.beam(center.add(n.mul(min)),center.add(n.mul(max)),settings.sleeperWidth(),settings.sleeperWidth(),top-settings.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
             index++;
         }
-        return clip(mesh,crossing);
+        SleeperEdits.finish(mesh,crossing,tracks,settings,p);
+        return clip(mesh,crossing,settings);
+    }
+    private static void ordinary(Mesh mesh,Track road,double distance,PointSettings settings,Profile p,int index){
+        V3 center=road.at(distance),normal=road.tangent(distance).lateral();double half=p.centerOffset()+settings.sleeperOverhang();
+        if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(mesh,center,normal,-half,half,settings,p,index);for(int sign:new int[]{-1,1})p.detail().fitting(mesh,center.add(normal.mul(sign*p.centerOffset())),normal,settings,p,index);}
+        else {double top=p.top()-p.railHeight()+settings.verticalOffset();mesh.beam(center.sub(normal.mul(half)),center.add(normal.mul(half)),settings.sleeperWidth(),settings.sleeperWidth(),top-settings.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
     }
 }

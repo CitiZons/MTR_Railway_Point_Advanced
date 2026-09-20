@@ -3,3 +3,6 @@ build/
 run/
 run-server/
 .idea/
+.claude/
+logs/
+tools/_env_probe.py

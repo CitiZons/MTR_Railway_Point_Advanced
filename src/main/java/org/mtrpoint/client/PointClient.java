@@ -17,7 +17,7 @@ public final class PointClient {
         public long builds;public ScissorsLayout scissors;
         private Mesh buildAt(double position,PointMesh.YBoundary boundary){
             Mesh result=scissors!=null&&junction.kind()==Junction.Kind.DIAMOND?scissors.centerMesh(settings,profile):PointMesh.build(junction,settings,profile,position,boundary);
-            if(scissors!=null&&junction.kind()!=Junction.Kind.DIAMOND)result=scissors.clip(result,junction);
+            if(scissors!=null&&junction.kind()!=Junction.Kind.DIAMOND)result=scissors.clip(result,junction,settings);
             return RailSampler.bank(result,junction,scissors==null?junction.tracks():scissors.tracks());
         }
         public Mesh mesh(){
@@ -34,12 +34,12 @@ public final class PointClient {
             // Static steelwork and sleepers are built once. Only blade/frog vertices interpolate.
             if(Math.abs(lastFrame-visual)>.005){
                 double blend=middle==null?visual:visual<.5?visual*2:visual*2-1;Mesh start=middle==null||visual<.5?left:middle,end=middle==null||visual>=.5?right:middle;
-                for(int i:moving){var a=start.quads.get(i);var b=end.quads.get(i);mesh.quads.set(i,new Mesh.Quad(a.a().lerp(b.a(),blend),a.b().lerp(b.b(),blend),a.c().lerp(b.c(),blend),a.d().lerp(b.d(),blend),a.surface(),a.part(),a.index(),a.uv()));}
+                for(int i:moving){var a=start.quads.get(i);var b=end.quads.get(i);mesh.quads.set(i,new Mesh.Quad(a.a().lerp(b.a(),blend),a.b().lerp(b.b(),blend),a.c().lerp(b.c(),blend),a.d().lerp(b.d(),blend),a.surface(),a.part(),a.index(),a.uv(),a.rail()));}
                 lastFrame=visual;lastPosition=visual;
             }return mesh;
         }
         public double renderedPosition(){return lastPosition;}
-        public void preview(PointSettings s){if(settings.equals(s)&&left!=null)return;settings=s;profile=profileFor(junction,s);styles=stylesFor(junction,s);left=null;mesh=null;refreshScissors();}
+        public void preview(PointSettings s){if(settings.equals(s)&&left!=null)return;settings=s;profile=profileFor(junction,s);styles=stylesFor(junction,s);left=null;mesh=null;geometryDirty=true;refreshScissors();}
     }
     public static List<View> views=List.of();
     private static final Map<String,AppearanceData.Entry> SETTINGS=new HashMap<>();
@@ -48,9 +48,9 @@ public final class PointClient {
     private static Map<String,ScissorsLayout> groupsById=Map.of();
     private static Map<String,List<PointNetwork.Movement>> movements=Map.of();
     private static PointNetwork.Motion motion;private static long motionReceived;
-    private static int ticks;private static Object level;private static long signature;private static boolean refreshProfiles;
+    private static int ticks;private static Object level;private static long signature;private static boolean refreshProfiles,geometryDirty;
     public static String message="";
-    public static void clear(){views=List.of();SETTINGS.clear();motion=null;signature=0;Profiles.clear();RailSampler.clear();BY_RAIL.clear();groupJunctions=List.of();groupsById=Map.of();movements=Map.of();PointRenderer.clear();}
+    public static void clear(){views=List.of();SETTINGS.clear();motion=null;signature=0;Profiles.clear();RailSampler.clear();BY_RAIL.clear();groupJunctions=List.of();groupsById=Map.of();movements=Map.of();geometryDirty=false;PointRenderer.clear();}
     public static long revision(String id){return SETTINGS.getOrDefault(id,new AppearanceData.Entry(PointSettings.DEFAULT,0)).revision();}
     public static PointSettings saved(String id){return SETTINGS.getOrDefault(id,new AppearanceData.Entry(PointSettings.DEFAULT,0)).value();}
     public static void receive(PointNetwork.State m){
@@ -59,6 +59,7 @@ public final class PointClient {
         SETTINGS.put(m.id(),new AppearanceData.Entry(AppearanceData.decode(m.json()),m.revision()));message=m.message();
         for(View v:views)if(v.junction.id().equals(m.id()))v.preview(saved(m.id()));
         if(mc.screen instanceof BlueprintScreen screen)screen.acknowledge(m.id(),m.message());
+        if(mc.screen instanceof PointSelectionScreen screen)screen.acknowledge(m.id(),m.message());
     }
     public static void motion(PointNetwork.Motion m){motion=m;motionReceived=System.currentTimeMillis();movements=index(m.entries());}
     public static void tick(){
@@ -66,6 +67,7 @@ public final class PointClient {
         if(++ticks%20==0)rebuild();
         if(!net.minecraftforge.fml.ModList.get().isLoaded("mtr_brsignal_addon")&&!views.isEmpty())movements=index(nativeMovements());
         for(View v:views){choose(v);double step=.05/v.settings.animationSeconds();v.position+=Math.max(-step,Math.min(step,v.target-v.position));}
+        if(geometryDirty&&!(mc.screen instanceof BlueprintScreen)&&!(mc.screen instanceof PointSelectionScreen)){PointRenderer.prepare(views);geometryDirty=false;}
     }
     public static void invalidate(){signature=0;refreshProfiles=true;Profiles.clear();}
     public static void rebuild(){
@@ -82,7 +84,7 @@ public final class PointClient {
             var v=new View(j,s,profileFor(j,s),stylesFor(j,s));if(old!=null){v.position=old.position;v.target=old.target;}
             if(mc.screen instanceof BlueprintScreen editor&&editor.pointId().equals(j.id())){View existing=previous.get(j.id());if(existing!=null){if(refreshProfiles){existing.left=null;existing.preview(existing.settings);}next.add(existing);continue;}}next.add(v);
         }
-        refreshProfiles=false;views=List.copyOf(next);refreshScissors();
+        refreshProfiles=false;views=List.copyOf(next);geometryDirty=true;refreshScissors();
         RailSampler.retain(tracks.stream().map(t->t.id).collect(java.util.stream.Collectors.toSet()));
     }
     private static void refreshScissors(){
@@ -93,7 +95,7 @@ public final class PointClient {
             groupsById=members;
         }
         BY_RAIL.clear();for(View v:views){
-            ScissorsLayout group=groupsById.get(v.junction.id());if(!Objects.equals(group,v.scissors)){v.scissors=group;v.left=null;v.mesh=null;}
+            ScissorsLayout group=groupsById.get(v.junction.id());if(!Objects.equals(group,v.scissors)){v.scissors=group;v.left=null;v.mesh=null;geometryDirty=true;}
             for(Track road:group!=null&&v.junction.kind()==Junction.Kind.DIAMOND?group.tracks():v.junction.tracks())BY_RAIL.computeIfAbsent(road.id,k->new ArrayList<>()).add(v);
         }
     }

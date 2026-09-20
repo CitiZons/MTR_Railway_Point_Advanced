@@ -25,6 +25,7 @@ final class DiamondRegression {
                 }
             }
             if(mesh.quads.stream().noneMatch(q->q.part().equals("frog_wall")))throw new AssertionError("Crossing noses have no solid cut walls");
+            checkISectionWalls(mesh,p,s);
             Mesh reverse=PointMesh.build(new Junction(j.id(),j.kind(),ta.reverse(),tb,j.center(),ta.length-j.sa(),j.sb(),j.extent()),s,p,0);
             List<Mesh.Quad> reversed=tops(reverse,p.top());
             for(int i=0;i<250;i++){V3 point=new V3((random.nextDouble()-.5)*3,0,(random.nextDouble()-.5)*3);if(coverage(tops,point)!=coverage(reversed,point))throw new AssertionError("Crossing changed after reversing a track");}
@@ -41,6 +42,31 @@ final class DiamondRegression {
             }
             System.out.println("PASS: diamond "+degrees+" deg, "+checked+" head/flangeway/overlap samples and track reversal");
         }
+        overlapping();
+    }
+    private static void checkISectionWalls(Mesh mesh,Profile p,PointSettings s){
+        double top=p.top()+s.verticalOffset(),base=top-p.railHeight();double[][] bands={{base,base+.025},{base+.025,top-.036},{top-.036,top}};
+        for(double[] band:bands){boolean found=mesh.quads.stream().filter(q->q.part().equals("frog_wall")).anyMatch(q->{double lo=List.of(q.a(),q.b(),q.c(),q.d()).stream().mapToDouble(V3::y).min().orElseThrow(),hi=List.of(q.a(),q.b(),q.c(),q.d()).stream().mapToDouble(V3::y).max().orElseThrow();return Math.abs(lo-band[0])<1e-6&&Math.abs(hi-band[1])<1e-6;});if(!found)throw new AssertionError("Crossing seam has no I-section wall band "+Arrays.toString(band));}
+    }
+    private static void overlapping(){
+        Profile p=Profile.STANDARD;PointSettings s=PointSettings.DEFAULT;
+        Track main=Regression.line("multi-main","m0","m1",new V3(0,0,-20),new V3(0,0,20));
+        Track first=Regression.line("multi-first","a0","a1",new V3(-20,0,0),new V3(20,0,0));
+        Track second=Regression.line("multi-second","b0","b1",new V3(-20,0,.65),new V3(20,0,.65));
+        var junctions=Detector.find(List.of(main,first,second)).stream().filter(j->j.kind()==Junction.Kind.DIAMOND).toList();
+        if(junctions.size()!=2)throw new AssertionError("Overlapping diamond fixture detection");
+        var requests=junctions.stream().map(j->new DiamondGeometry.Request(j,s,p,PointMesh.extent(j,s))).toList();Mesh combined=DiamondGeometry.combine(requests),overlaid=new Mesh();
+        for(var j:junctions)overlaid.quads.addAll(PointMesh.build(j,s,p,0).quads);
+        var top=tops(combined,p.top());Random random=new Random(8012);int repaired=0;
+        for(int i=0;i<5000;i++){
+            V3 q=new V3(random.nextDouble()*2.4-1.2,0,random.nextDouble()*1.4-.4);double a=lateral(main,q),b=lateral(first,q),c=lateral(second,q);
+            if(edge(a,p,s)||edge(b,p,s)||edge(c,p,s))continue;
+            boolean expected=(head(a,p,s)||head(b,p,s)||head(c,p,s))&&!channel(a,p,s)&&!channel(b,p,s)&&!channel(c,p,s);int actual=coverage(top,q);
+            if((actual>0)!=expected||actual>1)throw new AssertionError("Combined nearby diamonds lost a shared cut at "+q+" expected="+expected+" faces="+actual);
+            if(coverage(tops(overlaid,p.top()),q)>0&&!expected)repaired++;
+        }
+        if(repaired<10)throw new AssertionError("Overlapping diamond fixture did not reproduce independently refilled channels");
+        System.out.println("PASS: nearby diamond crossings share rail union and flange channels; repaired samples="+repaired);
     }
     private static boolean head(double d,Profile p,PointSettings s){return Math.abs(d-p.centerOffset())<p.headWidth()/2||Math.abs(d-(p.centerOffset()-p.headWidth()-s.flangeway()))<p.headWidth()/2;}
     private static boolean channel(double d,Profile p,PointSettings s){return d<p.centerOffset()-p.headWidth()/2&&d>p.centerOffset()-p.headWidth()/2-s.flangeway();}

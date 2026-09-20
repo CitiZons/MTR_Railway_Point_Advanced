@@ -8,6 +8,8 @@ import net.minecraftforge.client.event.*;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.ModLoadingContext;
+import net.minecraftforge.client.ConfigScreenHandler;
 import org.lwjgl.glfw.GLFW;
 import org.mtrpoint.PointMod;
 import org.mtrpoint.geometry.V3;
@@ -20,6 +22,7 @@ public final class ClientEvents {
     @SubscribeEvent public static void render(RenderLevelStageEvent e){PointRenderer.drawGpu(e);}
     @Mod.EventBusSubscriber(modid=PointMod.ID,value=Dist.CLIENT,bus=Mod.EventBusSubscriber.Bus.MOD)
     public static final class Registration {
+        static {ModLoadingContext.get().registerExtensionPoint(ConfigScreenHandler.ConfigScreenFactory.class,()->new ConfigScreenHandler.ConfigScreenFactory(PointConfigScreen::new));}
         @SubscribeEvent public static void keys(RegisterKeyMappingsEvent e){e.register(EDIT);}
         @SubscribeEvent public static void reload(RegisterClientReloadListenersEvent e){e.registerReloadListener((net.minecraft.server.packs.resources.ResourceManagerReloadListener)manager->PointClient.invalidate());}
     }

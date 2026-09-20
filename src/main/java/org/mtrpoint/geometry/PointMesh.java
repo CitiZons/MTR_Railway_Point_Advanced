@@ -17,7 +17,7 @@ public final class PointMesh {
         if(j.kind()==Junction.Kind.THREE)return ThreeWayMesh.build(j,s,raw,position,boundary);
         Mesh mesh=new Mesh();if(!s.enabled())return mesh;Profile p=raw.tune(s);
         double extent=extent(j,s),offset=p.centerOffset();
-        if(j.kind()==Junction.Kind.DIAMOND){DiamondGeometry.build(mesh,j,s,p,extent);sleepers(mesh,j,s,p,extent,boundary);return mesh;}
+        if(j.kind()==Junction.Kind.DIAMOND){DiamondGeometry.build(mesh,j,s,p,extent);sleepers(mesh,j,s,p,extent,boundary);SleeperEdits.finish(mesh,j,s,p);return mesh;}
         List<Running> runs=List.of(new Running(j.a(),-1,0),new Running(j.a(),1,0),new Running(j.b(),-1,1),new Running(j.b(),1,1));
         double frog=extent*.65;
         if(j.kind()==Junction.Kind.Y)for(double d=.25;d<=extent;d+=.1)if(j.a().at(d).distance(j.b().at(d))>2*offset){frog=d;break;}
@@ -33,38 +33,46 @@ public final class PointMesh {
             double c=r.branch==0?j.sa():j.sb(),start=j.kind()==Junction.Kind.Y?0:Math.max(0,c-extent),end=j.kind()==Junction.Kind.Y?(r.branch==0?boundary.aEnd():boundary.bEnd()):Math.min(r.track.length,c+extent);
             boolean inner=j.kind()==Junction.Kind.Y&&r.sign==(r.branch==0?side:-side);
             double localStart=r.branch==0?bladeStart:secondStart;
-            double step=.24; int count=(int)Math.ceil((end-start)/step);
-            for(int i=0;i<count;i++) {
-                double d=start+(end-start)*i/count,e=start+(end-start)*(i+1)/count;
-                if(r.branch==1&&e<=localStart)continue;
+            var stations=new TreeSet<Double>();stations.add(start);stations.add(end);for(double d=start+.24;d<end;d+=.24)stations.add(d);
+            if(localStart>start&&localStart<end)stations.add(localStart);if(localStart+blade>start&&localStart+blade<end)stations.add(localStart+blade);
+            if(inner&&crossing!=null){stations.add(Math.max(start,Math.min(end,crossing.toe(r.branch))));stations.add(Math.max(start,Math.min(end,crossing.heel(r.branch))));}
+            var distances=new ArrayList<>(stations);
+            for(int i=1;i<distances.size();i++) {
+                double d=distances.get(i-1),e=distances.get(i);
+                if(r.branch==1&&inner&&e<=localStart)continue;
                 if(inner&&crossing!=null){double toe=crossing.toe(r.branch),heel=crossing.heel(r.branch);if(d>=toe&&e<=heel)continue;if(d<toe&&e>toe)e=toe;else if(d<heel&&e>heel)d=heel;}
                 V3 a=running(r,d,offset),b=running(r,e,offset);
-                double ta=1,tb=1;
                 if(inner&&e>localStart&&d<localStart+blade) {
-                    ta=Math.max(.025,Math.min(1,(d-localStart)/blade));tb=Math.max(.025,Math.min(1,(e-localStart)/blade));
                     double open=r.branch==0?position:1-position;
-                    a=TurnoutFrame.blade(r.track,d,r.sign,offset,open,localStart,blade,s);
-                    b=TurnoutFrame.blade(r.track,e,r.sign,offset,open,localStart,blade,s);
+                    Track stock=r.branch==0?j.b():j.a();
+                    var bladeA=TurnoutFrame.blade(r.track,stock,d,r.sign,offset,p.headWidth(),open,localStart,blade,s);
+                    var bladeB=TurnoutFrame.blade(r.track,stock,e,r.sign,offset,p.headWidth(),open,localStart,blade,s);
+                    mesh.blade(bladeA.point(),bladeB.point(),bladeA.cut(),bladeB.cut(),p,s);continue;
                 }
-                mesh.rail(a,b,ta,tb,p,s,inner&&e>localStart&&d<localStart+blade?"blade":"rail");
+                // The outer branch follows its native node-centred curve. A straight bridge
+                // from the common road to the blade toe creates a visible spike on curves.
+                mesh.rail(a,b,1,1,p,s,"rail",new Mesh.RailTag(r.track,d,e,r.sign*offset));
             }
         }
         if(j.kind()==Junction.Kind.Y) {
             crossing.build(mesh,position);
             // A paired stretcher bar translates with the blades, entirely in the visual mesh.
             double at=bladeStart+Math.min(1,blade/3);V3 origin=j.a().at(at),forward=j.a().tangent(at);
-            V3 a=TurnoutFrame.contact(j.a(),at,side,offset,position,bladeStart,blade,s,origin,forward);
-            V3 b=TurnoutFrame.contact(j.b(),j.b().nearest(origin),-side,offset,1-position,secondStart,blade,s,origin,forward);
+            V3 a=TurnoutFrame.contact(j.a(),j.b(),at,side,offset,p.headWidth(),position,bladeStart,blade,s,origin,forward);
+            V3 b=TurnoutFrame.contact(j.b(),j.a(),j.b().nearest(origin),-side,offset,p.headWidth(),1-position,secondStart,blade,s,origin,forward);
             mesh.beam(a,b,.09,.09,p.top()+s.verticalOffset()-.07,p.top()+s.verticalOffset()-.03,p.steel(),"stretcher",-1);
         }
         sleepers(mesh,j,s,p,extent,boundary);
         EndSleepers.finish(mesh,j,s,p,boundary);
+        SleeperEdits.finish(mesh,j,s,p);
         return mesh;
     }
     private static V3 running(Running r,double s,double offset){return r.track.at(s).add(r.track.tangent(s).lateral().mul(r.sign*offset));}
     public static V3 sleeperNormal(Junction j,PointSettings s,double distance,double start,double end){
         double t=Math.max(0,Math.min(1,(distance-start)/Math.max(.001,end-start)));
-        V3 direction=s.sleeperMode()==0?j.a().tangent(distance):j.a().tangent(start);
+        Track reference=SleeperEdits.path(j.tracks(),s.sleeperPath());V3 sample=j.a().at(Math.max(0,Math.min(j.a().length,distance)));
+        double at=reference.nearest(sample),begin=reference.nearest(j.a().at(Math.max(0,Math.min(j.a().length,start))));
+        V3 direction=s.sleeperMode()==0?reference.tangent(at):reference.tangent(begin);
         double blend=s.sleeperMode()==2?t:s.sleeperMode()==3?t*t*(3-2*t):0;
         double angle=Math.toRadians(s.sleeperAngle()+(s.sleeperEndAngle()-s.sleeperAngle())*blend);
         V3 n=direction.lateral();return new V3(n.x()*Math.cos(angle)-n.z()*Math.sin(angle),0,n.x()*Math.sin(angle)+n.z()*Math.cos(angle));
@@ -115,11 +123,18 @@ public final class PointMesh {
                 V3 seat=road.at(near).add(road.tangent(near).lateral().mul(sign*p.centerOffset()));
                 if(Math.abs(seat.sub(c).dot(forward))<.15&&seats.stream().noneMatch(v->v.distance(seat)<.18)){seats.add(seat);double lateral=seat.sub(c).dot(n);lo=Math.min(lo,lateral-s.sleeperOverhang());hi=Math.max(hi,lateral+s.sleeperOverhang());}
             }
-            if(p.detail()!=null){
+            if(SleeperEdits.split(s,index)){
+                for(Track road:j.tracks())ordinarySleeper(m,road,road.nearest(c),n,s,p,index);
+            }else if(p.detail()!=null){
                 if(!p.detail().siding())p.detail().bearer(m,c,n,lo,hi,s,p,index);
                 for(V3 seat:seats)p.detail().fitting(m,seat,n,s,p,index);
             }else m.beam(c.add(n.mul(lo)),c.add(n.mul(hi)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);
             index++;
         }
+    }
+    private static void ordinarySleeper(Mesh mesh,Track road,double distance,V3 normal,PointSettings s,Profile p,int index){
+        V3 center=road.at(distance);double half=p.centerOffset()+s.sleeperOverhang();
+        if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(mesh,center,normal,-half,half,s,p,index);for(int sign:new int[]{-1,1})p.detail().fitting(mesh,center.add(normal.mul(sign*p.centerOffset())),normal,s,p,index);}
+        else {double top=p.top()-p.railHeight()+s.verticalOffset();mesh.beam(center.sub(normal.mul(half)),center.add(normal.mul(half)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
     }
 }

@@ -39,7 +39,7 @@ final class ReportedGeometryRegression {
         }
         var groups=ScissorsLayout.find(Detector.find(roads));if(groups.size()!=1)throw new AssertionError("Asymmetric scissors group lost");
         var group=groups.get(0);Mesh center=group.centerMesh(PointSettings.DEFAULT,Profile.STANDARD),combined=new Mesh();combined.quads.addAll(center.quads);
-        for(var branch:group.turnouts())combined.quads.addAll(group.clip(PointMesh.build(branch,PointSettings.DEFAULT,Profile.STANDARD,0,group.boundary(branch,PointSettings.DEFAULT)),branch).quads);
+        for(var branch:group.turnouts())combined.quads.addAll(group.clip(PointMesh.build(branch,PointSettings.DEFAULT,Profile.STANDARD,0,group.boundary(branch,PointSettings.DEFAULT)),branch,PointSettings.DEFAULT).quads);
         DiamondRegression.scissors(group,center,combined);Regression.export(combined,"scissors-asymmetric");
         System.out.println("PASS: remote node divergence and perpendicular moving bars; shallow/interior crossings; diamond V mode; cross-ID guard union");
     }
