@@ -34,17 +34,20 @@ public final class Detector {
                 result.add(new Junction("y:"+entry.getKey()+":"+a.id+":"+b.id,Junction.Kind.Y,a,b,a.at(0),0,0,extent));
             }
         }
-        // Spatial bins keep crossing discovery local instead of comparing every rail pair.
-        var bins=new HashMap<String,List<Segment>>(); var seen=new HashSet<String>();
+        // Spatial bins keep crossing discovery local instead of comparing every rail pair. The cell
+        // key is hashed as a long: this runs over every sampled segment of every nearby rail once a
+        // second, and building "x:z" strings for them was pure allocation churn on the client.
+        var bins=new HashMap<Long,List<Segment>>();
         for(Track t:tracks) for(int i=1;i<t.points.size();i++) {
             V3 a=t.points.get(i-1),b=t.points.get(i);
             for(int x=(int)Math.floor(Math.min(a.x(),b.x())/8);x<=(int)Math.floor(Math.max(a.x(),b.x())/8);x++)
                 for(int z=(int)Math.floor(Math.min(a.z(),b.z())/8);z<=(int)Math.floor(Math.max(a.z(),b.z())/8);z++) {
-                    String cell=x+":"+z; var entries=bins.computeIfAbsent(cell,k->new ArrayList<>());
+                    var entries=bins.computeIfAbsent(cell(x,z),k->new ArrayList<>());
                     for(Segment other:entries) {
                         if(t.id.equals(other.t.id))continue;
-                        String pair=t.id.compareTo(other.t.id)<0?t.id+"/"+i+"|"+other.t.id+"/"+other.i:other.t.id+"/"+other.i+"|"+t.id+"/"+i;
-                        if(!seen.add(pair))continue;
+                        // A long segment pair can share two cells. No per-pair key set is needed: the
+                        // crossing is added once because an identical pair yields the same rounded
+                        // position and is filtered against the result below.
                         double[] uv=intersection(a,b,other.t.points.get(other.i-1),other.t.points.get(other.i)); if(uv==null)continue;
                         V3 p=a.lerp(b,uv[0]),q=other.t.points.get(other.i-1).lerp(other.t.points.get(other.i),uv[1]);
                         if(Math.abs(p.y()-q.y())>.08)continue;
@@ -64,6 +67,8 @@ public final class Detector {
         }
         return List.copyOf(result);
     }
+    /** One bin per 8 m cell, keyed without allocating: the pair (x,z) is injective in the long. */
+    private static long cell(int x,int z){return ((long)x<<32)^(z&0xffffffffL);}
     public static double[] intersection(V3 a,V3 b,V3 c,V3 d) {
         V3 r=b.sub(a),s=d.sub(c);double den=V3.crossXZ(r,s);if(Math.abs(den)<1e-9)return null;
         double u=V3.crossXZ(c.sub(a),s)/den,v=V3.crossXZ(c.sub(a),r)/den;

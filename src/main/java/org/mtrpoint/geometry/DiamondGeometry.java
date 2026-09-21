@@ -17,7 +17,9 @@ public final class DiamondGeometry {
         Plane reverse(){return new Plane(n.mul(-1),-d);}
         V3 origin(){return n.mul(d/n.dot(n));}
     }
-    private record Span(int road,int line,V3 a,V3 b,Plane start,Plane end,double width,String part,boolean first,boolean last) {
+    /** {@code cutter} marks a rail another style group bakes: it is offered to this bake as a cut
+     * plane only, is never emitted, and may only remove guard steel. */
+    private record Span(int road,int line,V3 a,V3 b,Plane start,Plane end,double width,String part,boolean first,boolean last,boolean cutter) {
         V3 normal(){return b.sub(a).lateral();}
         Plane level(double height){
             V3 u=b.sub(a);double horizontal=u.x()*u.x()+u.z()*u.z();
@@ -31,7 +33,7 @@ public final class DiamondGeometry {
         }
         List<Plane> channel(){V3 n=normal();return List.of(start,end,new Plane(n,a.add(n.mul(width/2))),new Plane(n.mul(-1),a.sub(n.mul(width/2))));}
         /** Same centre line and mouths, but a section width that matches one beam layer. */
-        Span withWidth(double value){return new Span(road,line,a,b,start,end,value,part,first,last);}
+        Span withWidth(double value){return new Span(road,line,a,b,start,end,value,part,first,last,cutter);}
     }
     private DiamondGeometry(){}
 
@@ -59,6 +61,13 @@ public final class DiamondGeometry {
         var groups=new LinkedHashMap<Style,List<Request>>();
         for(var request:requests)groups.computeIfAbsent(new Style(request.profile,request.settings.verticalOffset()),k->new ArrayList<>()).add(request);
         var remaining=new ArrayList<>(externalGuards);
+        // Every crossing rail this assembly bakes, with the style group that draws it and the height
+        // that group bakes it at. A guard is pooled into whichever group matches its own style, which
+        // for a plain fixed-Y neighbour with a height override is that neighbour's own group: the
+        // crossing rails of the other groups are still steel it physically crosses, so they are the
+        // cutters its bake needs. A guard that matches no group at all falls through to guards().
+        var crossingRails=new ArrayList<Cut>();
+        var bakes=new ArrayList<Group>();
         int styleGroup=0;
         for(var group:groups.values()){
             var rails=new ArrayList<Span>();var channels=new ArrayList<Span>();var checks=new ArrayList<GuardRails.Run>();
@@ -81,19 +90,33 @@ public final class DiamondGeometry {
             var incoming=new ArrayList<FrogGeometry.WingRun>();var checkWings=new ArrayList<FrogGeometry.WingRun>();
             for(var wing:wings)if(Math.abs(Math.abs(wing.offset())-p.centerOffset())<=WING_BASE_TOLERANCE)incoming.add(wing);else checkWings.add(wing);
             var poolWings=new ArrayList<FrogGeometry.WingRun>(checkWings);
-            var poolRuns=exposeEnds(GuardRails.merge(pool));
+            var poolRuns=GuardRails.exposeEnds(GuardRails.merge(pool));
             GeometryProbe.guardSeams(poolRuns);
             for(var run:poolRuns)if(run.end()>run.start()+1e-7)poolWings.add(convert(run));
             var mergedIncoming=FrogGeometry.mergeWings(incoming);
             var mergedPool=joinExactEnds(FrogGeometry.mergeWings(poolWings),p);
+            int groupIndex=styleGroup;
             GeometryProbe.wingRuns(styleGroup++,height,poolWings,mergedPool);
             appendWings(rails,mergedIncoming,width,lineBase,2,"wing");
             appendWings(rails,mergedPool,width,lineBase+500,8,"guard");
             if(Boolean.getBoolean("pointProbeBins"))GeometryProbe.spanBins(styleGroup,spanRows(rails,lineBase+500,poolRuns));
-            bake(out,rails,channels,p,group.get(0).settings);
+            bakes.add(new Group(rails,channels,p,group.get(0).settings,height));
+            for(var span:rails)if(!span.part.equals("guard"))crossingRails.add(new Cut(span,height,groupIndex));
         }
-        // A guard whose style owns no crossing here is still real steel; render it as before.
-        if(!remaining.isEmpty())out.quads.addAll(guards(remaining).quads);
+        // Each group is baked against its own rails plus the crossing rails of every other group,
+        // moved into this group's level frame first. A cutter is only ever a cut plane, so no steel
+        // is drawn twice, and the guard's own section gate still decides whether the two overlap.
+        int bakeIndex=0;
+        for(var bake:bakes){
+            var cutters=new ArrayList<Span>();int cutter=0;
+            for(var cut:crossingRails)if(cut.group()!=bakeIndex)cutters.add(atLevel(cut.span(),cut.height()-bake.height(),-(++cutter)));
+            bake(out,bake.rails(),bake.channels(),bake.profile(),bake.settings(),cutters);
+            bakeIndex++;
+        }
+        // A guard whose style owns no crossing here is still real steel, and the crossing rails it
+        // physically crosses must still cut it: guards() bakes only the run itself, so it is given
+        // those rails as cutters instead of an empty span list.
+        if(!remaining.isEmpty())out.quads.addAll(guards(remaining,crossingRails).quads);
         return out;
     }
     /** Dump the pooled check spans together with the runs they were pooled from. */
@@ -123,17 +146,8 @@ public final class DiamondGeometry {
         return out;
     }
     public static void three(Mesh out,Junction j,PointSettings s,Profile p,double[] starts,double[] ends){
-        var rails=new ArrayList<Span>();var channels=new ArrayList<Span>();var checks=new ArrayList<GuardRails.Run>();
+        var rails=new ArrayList<Span>();var channels=new ArrayList<Span>();
         double gap=Math.max(.02,s.flangeway()+s.wingGapDelta()),width=Math.max(p.headWidth(),p.footWidth());
-        for(int a=0;a<3;a++)for(int b=a+1;b<3;b++){
-            Junction pair=new Junction(j.id(),Junction.Kind.Y,j.tracks().get(a),j.tracks().get(b),j.center(),0,0,j.extent());
-            FrogGeometry frog=new FrogGeometry(pair,s,p,PointMesh.extent(j,s));double side=TurnoutFrame.side(pair,PointMesh.extent(j,s));
-            for(int local=0;local<2;local++){
-                int road=local==0?a:b;Track t=j.tracks().get(road);double sign=local==0?side:-side;
-                checks.add(new GuardRails.Run(t,Math.max(starts[road],frog.toe(local)),Math.min(ends[road],frog.heel(local)+.65),sign*(p.centerOffset()-p.headWidth()-gap),true,true,p,s));
-                checks.add(frog.guard(local));
-            }
-        }
         for(int road=0;road<3;road++){
             Track t=j.tracks().get(road);
             for(int sign:new int[]{-1,1}){
@@ -143,7 +157,9 @@ public final class DiamondGeometry {
             }
         }
         int id=6;
-        for(var run:GuardRails.merge(checks))if(run.end()>run.start()){rails.addAll(path(run,id,id,width));id++;}
+        // The check list comes from the same enumerator the editor selects from, so a manual
+        // station or merge group on a fan reaches the steel this bake reconstructs.
+        for(var run:GuardRails.merge(ThreeWayMesh.checksFor(j,s,p,starts,ends)))if(run.end()>run.start()){rails.addAll(path(run,id,id,width));id++;}
         bake(out,rails,channels,p,s);
     }
     /** Reserve a fixed pocket for the complete throw of a moving crossing insert. */
@@ -164,7 +180,12 @@ public final class DiamondGeometry {
         return subtract(source,planes,true,new Plane(new V3(0,1,0),top));
     }
     /** Geometric union also covers guards that coincide only for part of their curves. */
-    public static Mesh guards(List<GuardRails.Run> runs){
+    public static Mesh guards(List<GuardRails.Run> runs){return guards(runs,List.of());}
+    /** The same bake, additionally cut against rails it does not own. A guard whose
+     * (profile, height) matches no crossing style group is not pooled, but it still lies across
+     * the crossing rails of that assembly, so they are passed here as cutters. They are only ever
+     * used as cut planes: {@code bake} emits {@code rails} alone. */
+    private static Mesh guards(List<GuardRails.Run> runs,List<Cut> cutters){
         Mesh out=new Mesh();record Style(Profile p,double height){}
         var mergedRuns=GuardRails.merge(runs);
         GeometryProbe.guardRuns(runs,mergedRuns);
@@ -172,45 +193,45 @@ public final class DiamondGeometry {
         for(var r:mergedRuns)guardGroups.computeIfAbsent(new Style(r.profile(),r.settings().verticalOffset()),k->new ArrayList<>()).add(r);
         for(var group:guardGroups.values()){
             Profile p=group.get(0).profile();PointSettings s=group.get(0).settings();var rails=new ArrayList<Span>();int id=0;
-            for(var original:exposeEnds(group)){
-                for(var span:path(original,id,id,Math.max(p.headWidth(),p.footWidth())))rails.add(new Span(span.road,span.line,span.a,span.b,span.start,span.end,span.width,"guard",span.first,span.last));id++;
+            var cuttersAtLevel=new ArrayList<Span>();
+            // A cutter from another group is not baked at this group's height, so it is moved into
+            // this bake's own level frame first: the vertical gate then compares real sections.
+            for(int i=0;i<cutters.size();i++){var cutter=cutters.get(i);cuttersAtLevel.add(atLevel(cutter.span(),cutter.height()-s.verticalOffset(),-(i+1)));}
+            for(var original:GuardRails.exposeEnds(group)){
+                // The line number only has to be unique among the cutters this bake runs against,
+                // so these runs sit in a band no crossing-rail line can reach.
+                for(var span:path(original,id,GUARD_LINE_BASE+id,Math.max(p.headWidth(),p.footWidth())))rails.add(new Span(span.road,span.line,span.a,span.b,span.start,span.end,span.width,"guard",span.first,span.last,false));id++;
             }
-            bake(out,rails,List.of(),p,s);
+            bake(out,rails,List.of(),p,s,cuttersAtLevel);
         }
         return out;
     }
-    /** Re-expose the ends a merge closed: the flare belongs to the extreme end of the union,
-     * not to the interior seam where two coincident runs were stitched together. */
-    private static List<GuardRails.Run> exposeEnds(List<GuardRails.Run> runs){
-        var result=new ArrayList<GuardRails.Run>(runs.size());
-        for(var run:runs){
-            boolean start=run.flareStart(),end=run.flareEnd();
-            for(var other:runs)if(other!=run){
-                if(coveredEnd(run,run.start(),other))start=false;
-                if(coveredEnd(run,run.end(),other))end=false;
-            }
-            result.add(start==run.flareStart()&&end==run.flareEnd()?run:new GuardRails.Run(run.road(),run.start(),run.end(),run.offset(),start,end,run.profile(),run.settings()));
-        }
-        return result;
+    /** One baked style group of the assembly: the steel it draws and the level it draws it at. */
+    private record Group(List<Span> rails,List<Span> channels,Profile profile,PointSettings settings,double height){}
+    /** One crossing rail offered as a cutter, with the vertical appearance override its own style
+     * group baked it at and the group that owns it: two groups can sit at different heights over
+     * the same plan geometry, so a cutter is only ever valid inside one baking group's frame. */
+    private record Cut(Span span,double height,int group){}
+    /** A cutter span expressed in the baking group's level frame. Every cut plane a bake builds is
+     * a horizontal direction or an XZ offset, so this shift reaches only overlapsVertically(),
+     * which otherwise compares two sections baked at different heights as if they were level. The
+     * line number moves into a band no baked rail uses, so a cutter from another group is never
+     * mistaken for one of this group's own spans, and a coincident guard still yields to it. */
+    private static Span atLevel(Span span,double delta,int line){
+        return new Span(span.road,line,span.a.add(0,delta,0),span.b.add(0,delta,0),span.start,span.end,span.width,span.part,span.first,span.last,true);
     }
+    /** Line numbers of guard steel in a fallback bake, clear of every crossing rail's own lines. */
+    private static final int GUARD_LINE_BASE=1<<20;
     /** Fold one check run onto the frog's representation. The native 10 cm terminal flare
      * becomes the blend from the base line out to the parked check offset. */
     private static FrogGeometry.WingRun convert(GuardRails.Run run){
         double base=run.offset(),flared=base-Math.signum(base)*.10;
+        // The caps follow the exposed mouths, not every run end: an interior seam of a merged band
+        // is not a rail end, and keeping its face there left one mouth standing inside the union.
         return new FrogGeometry.WingRun(run.road(),run.start(),
             run.flareStart()?Math.min(run.end(),run.start()+.4):run.start(),
             run.flareEnd()?Math.max(run.start(),run.end()-.4):run.end(),
-            run.end(),run.flareStart()?flared:base,base,run.flareEnd()?flared:base,true,true);
-    }
-    private static boolean coveredEnd(GuardRails.Run run,double d,GuardRails.Run other){
-        // Test the working centre lines, before either exposed mouth is flared inward.
-        // Otherwise the 10 cm flare itself makes physically overlapping runs look separate.
-        V3 point=run.center(d);double near=other.road().nearest(point);
-        if(near<other.start()-.12||near>other.end()+.12)return false;
-        if(Math.abs(run.road().tangent(d).dot(other.road().tangent(near)))<.98)return false;
-        // Slightly different MTR centre lines may still describe one overlapping rail.
-        // Use the full section width, otherwise both internal flared mouths survive.
-        return point.distance(other.center(near))<(run.profile().footWidth()+other.profile().footWidth())*.5;
+            run.end(),run.flareStart()?flared:base,base,run.flareEnd()?flared:base,run.flareStart(),run.flareEnd());
     }
     private static void build(Mesh out,Junction j,PointSettings s,Profile p,double extent,ScissorsLayout group){
         var rails=new ArrayList<Span>();var channels=new ArrayList<Span>();var checks=new ArrayList<GuardRails.Run>();
@@ -231,6 +252,10 @@ public final class DiamondGeometry {
         if(p.detail()!=null)for(var q:p.detail().rails())for(V3 v:List.of(q.a(),q.b(),q.c(),q.d()))
             sectionWidth=Math.max(sectionWidth,2*Math.abs(v.x()-p.detail().railCenter())*p.headWidth()/p.detail().headWidth());
         var roads=group==null?j.tracks():group.tracks();
+        // A plain crossing owns its check rails through the same generator the editor edits, so a
+        // manual station or merge group reaches the steel the union later reconstructs.
+        boolean sharedChecks=group==null&&j.kind()==Junction.Kind.DIAMOND;
+        if(sharedChecks)checks.addAll(GuardRails.crossing(j,s,p));
         for(int road=0;road<roads.size();road++){
             Track t=roads.get(road);double c=t.nearest(j.center());
             double start=Math.max(0,c-extent),end=Math.min(t.length,c+extent);
@@ -243,7 +268,8 @@ public final class DiamondGeometry {
                 // These inside rails become the wings of the acute crossings and the check
                 // rails of the obtuse crossings. Only their terminal mouths flare inward.
                 double checkOffset=sign*(p.centerOffset()-p.headWidth()-gap-Math.max(0,s.guardGapDelta()));
-                if(group==null||t.id.equals(j.a().id)||t.id.equals(j.b().id)){
+                if(sharedChecks){/* enumerated above, already carrying this view's manual edits */}
+                else if(group==null||t.id.equals(j.a().id)||t.id.equals(j.b().id)){
                     if(guardEnd>guardStart)checks.add(new GuardRails.Run(t,guardStart,guardEnd,checkOffset,true,true,p,s));
                 }else{
                     var localChecks=new ArrayList<GuardRails.Run>();
@@ -328,13 +354,22 @@ public final class DiamondGeometry {
     }
     private static void appendChecks(List<Span> rails,List<GuardRails.Run> checks,double width,int lineBase){
         int id=lineBase;
-        var merged=GuardRails.merge(checks);
+        // Same two steps as the pooled path: merge, then re-expose the extreme mouths only. Without
+        // the second step two coincident check runs of one crossing kept a mouth each at the shared
+        // seam. The part stays the frog wing's, because this generator is shared with the fixed
+        // crossing's wing steel.
+        var merged=GuardRails.exposeEnds(GuardRails.merge(checks));
         for(var run:merged)if(run.end()>run.start()+1e-7){
-            for(var span:path(run,0,id++,width))rails.add(new Span(span.road,span.line,span.a,span.b,span.start,span.end,span.width,"wing",span.first,span.last));
+            for(var span:path(run,0,id++,width))rails.add(new Span(span.road,span.line,span.a,span.b,span.start,span.end,span.width,"wing",span.first,span.last,false));
         }
     }
-    private static void bake(Mesh out,List<Span> rails,List<Span> channels,Profile p,PointSettings s){
-        var railBins=bins(rails);var channelBins=bins(channels);
+    private static void bake(Mesh out,List<Span> rails,List<Span> channels,Profile p,PointSettings s){bake(out,rails,channels,p,s,List.of());}
+    /** {@code cutters} are rails this bake is cut against without emitting them: the crossing rails
+     * an unpooled guard lies across. Binning them with the baked rails is what makes the cut land. */
+    private static void bake(Mesh out,List<Span> rails,List<Span> channels,Profile p,PointSettings s,List<Span> cutters){
+        List<Span> binned=rails;
+        if(!cutters.isEmpty()){binned=new ArrayList<>(rails);binned.addAll(cutters);}
+        var railBins=bins(binned);var channelBins=bins(channels);
         // Custom models still describe one whole section; only the built-in profile splits.
         boolean wholeSection=p.detail()!=null&&!p.detail().rails().isEmpty();
         for(Span rail:rails){
@@ -375,17 +410,29 @@ public final class DiamondGeometry {
         // Voronoi seams join equal native cross sections into a solid V, without
         // double top faces or tapering each incoming rail before the heads merge.
         for(Span other:nearby(rail,railBins))if(rail.line!=other.line&&rail.near(other)){
-            if(rail.part.equals("guard")){
-                Plane level=rail.level(0);
-                if(Math.abs(level.n.dot(other.a)-level.d)>.005||Math.abs(level.n.dot(other.b)-level.d)>.005)continue;
-            }
+            // A cutter from another style group is drawn at a different level, so it may only ever
+            // remove guard steel: the guard's own section gate below proves the two really overlap,
+            // while a running rail of another height must keep the steel this group owns.
+            if(other.cutter&&!rail.part.equals("guard"))continue;
             Span mate=other.withWidth(cut.width);
             V3 a=cut.normal(),b=mate.normal();double da=a.dot(cut.a),db=b.dot(mate.a);
             if(Math.abs(Math.abs(a.dot(b))-1)<1e-10&&Math.abs(da-db*Math.signum(a.dot(b)))<1e-8){
-                // Equal-distance seams need one owner; subtracting both deletes steel.
+                // Equal-distance seams need one owner; subtracting both deletes steel. A guard that
+                // coincides with a rail of another height is not the same rail, so it keeps its own
+                // steel instead of being handed over to the other span's owner.
+                if(rail.part.equals("guard")){
+                    Plane level=rail.level(0);
+                    if(Math.abs(level.n.dot(other.a)-level.d)>.005||Math.abs(level.n.dot(other.b)-level.d)>.005)continue;
+                }
                 if(other.line<rail.line)section=cutRailSeam(section,mate.channel(),rail,target,p,s);
                 continue;
             }
+            // A check rail must yield to the rail that crosses it, whatever the two roads' height
+            // difference. The 5 mm gate above used to sit in front of every span, so a crossing
+            // whose roads sit a few centimetres apart (the detector tolerates 80 mm) baked its
+            // guard steel straight through the running rail. Only a rail that cannot overlap the
+            // guard vertically is genuinely clear of it.
+            if(rail.part.equals("guard")&&!overlapsVertically(rail,other,p))continue;
             section=cutRailSeam(section,List.of(mate.start,mate.end,new Plane(b.sub(a),db-da),new Plane(b.mul(-1).sub(a),-db-da)),rail,target,p,s);
             section=cutRailSeam(section,List.of(mate.start,mate.end,new Plane(b.add(a),db+da),new Plane(a.sub(b),da-db)),rail,target,p,s);
         }
@@ -403,6 +450,14 @@ public final class DiamondGeometry {
         out.quads.addAll(section.quads);
     }
 
+    /** True while two rail sections can still interpenetrate, i.e. their base lines are less than
+     * one rail height apart. A rail further above runs clear over the guard and must not cut it. */
+    private static boolean overlapsVertically(Span rail,Span other,Profile p){
+        Plane level=rail.level(0);
+        double low=Math.min(level.n.dot(other.a),level.n.dot(other.b))-level.d;
+        double high=Math.max(level.n.dot(other.a),level.n.dot(other.b))-level.d;
+        return high>-p.railHeight()&&low<p.railHeight();
+    }
     /** Rail-on-rail seams are full-depth cuts. Built-in rails are solved one beam at a time,
      * so each exposed wall occupies exactly the foot, web or head band instead of a single
      * rectangular plate which fills both I-section recesses. */
@@ -412,8 +467,7 @@ public final class DiamondGeometry {
         return subtract(section,planes,true,rail.level(layer.top()),layer.top()-layer.bottom());
     }
 
-    private static long cell(int x,int z){return ((long)x<<32)^(z&0xffffffffL);}
-    private static Map<Long,List<Span>> bins(List<Span> spans){
+    private static long cell(int x,int z){return ((long)x<<32)^(z&0xffffffffL);}    private static Map<Long,List<Span>> bins(List<Span> spans){
         var bins=new HashMap<Long,List<Span>>();
         for(Span s:spans)for(int x=(int)Math.floor(Math.min(s.a.x(),s.b.x())-s.width);x<=(int)Math.floor(Math.max(s.a.x(),s.b.x())+s.width);x++)
             for(int z=(int)Math.floor(Math.min(s.a.z(),s.b.z())-s.width);z<=(int)Math.floor(Math.max(s.a.z(),s.b.z())+s.width);z++)bins.computeIfAbsent(cell(x,z),k->new ArrayList<>()).add(s);
@@ -438,7 +492,9 @@ public final class DiamondGeometry {
     private static List<Span> path(GuardRails.Run run,int road,int line,double width){
         int count=Math.max(2,(int)Math.ceil((run.end()-run.start())/.24));var points=new ArrayList<V3>();
         for(int i=0;i<=count;i++)points.add(run.point(run.start()+(run.end()-run.start())*i/count));
-        return spans(points,road,line,width,"wing");
+        // Only an exposed mouth gets an end face: exposeEnds() already cleared the flare of every
+        // end another run covers, and a merged band must not keep a face inside its own seam.
+        return spans(points,road,line,width,"wing",run.flareStart(),run.flareEnd());
     }
     private static List<Span> wingPath(FrogGeometry.WingRun wing,int road,int line,double width,String part){
         var points=new ArrayList<V3>();
@@ -464,7 +520,7 @@ public final class DiamondGeometry {
             V3 a=points.get(i),b=points.get(i+1),u=horizontal(b.sub(a));
             V3 before=i==0?u:horizontal(a.sub(points.get(i-1))).add(u).unit();
             V3 after=i==count-1?u:horizontal(points.get(i+2).sub(b)).add(u).unit();
-            result.add(new Span(road,line,a,b,new Plane(before.mul(-1),a),new Plane(after,b),width,part,first&&i==0,last&&i==count-1));
+            result.add(new Span(road,line,a,b,new Plane(before.mul(-1),a),new Plane(after,b),width,part,first&&i==0,last&&i==count-1,false));
         }
         return result;
     }

@@ -86,7 +86,12 @@ public final class RailCuts {
                 else {Segment p=union.get(union.size()-1);union.set(union.size()-1,new Segment(p.road,p.start,Math.max(p.end,s.end),p.offset,p.profile,p.settings));}}
             for(Segment whole:union){var holes=new ArrayList<double[]>();
                 for(Cut cut:cuts){
-                    if(!cut.road.id.equals(whole.road.id)||Math.abs(cut.offset-whole.offset)>=1e-5||!cut.profile.equals(whole.profile)||cut.settings.verticalOffset()!=whole.settings.verticalOffset())continue;
+                    // Height is an appearance override of the same rail, not a different rail: the
+                    // clip planes are vertical, so the hole still names this rail's stations. The
+                    // untagged path below has always been height-blind, and the cap uses the
+                    // segment's own settings, so a height difference cannot move any steel.
+                    if(!cut.road.id.equals(whole.road.id))continue;
+                    if(!sameRail(cut.offset,whole.offset))continue;
                     double a=Math.max(whole.start,cut.start),b=Math.min(whole.end,cut.end);if(b>a+1e-7)holes.add(new double[]{a,b});
                 }
                 holes.sort(Comparator.comparingDouble(v->v[0]));var mergedHoles=new ArrayList<double[]>();
@@ -145,10 +150,21 @@ public final class RailCuts {
         return new Cut(cut.road.reverse(),cut.road.length-cut.end,cut.road.length-cut.start,-cut.offset,cut.radius,cut.profile,cut.settings);
     }
 
+    /** True when a cut and a rail name the same running rail of one road.
+     * A cut's lateral offset is derived from the cutting view's own appearance, but the two views
+     * that meet on a shared road may carry different overrides (gauge, head width, rail height),
+     * which move that rail by centimetres. An exact offset test would then miss the neighbour's
+     * steel and leave its frog continuous, so the rail is identified by the side of the road it
+     * sits on: the two running rails are a gauge apart, and the cap that closes the hole always
+     * uses the segment's own profile and offset, so a match can only remove a crossing pocket. */
+    public static boolean sameRail(double cutOffset,double railOffset){
+        return Math.abs(cutOffset-railOffset)<Math.abs(cutOffset+railOffset);
+    }
+
     private static boolean belongs(Mesh.Quad quad,Cut cut){
         if(quad.rail()!=null){
             Mesh.RailTag tag=quad.rail().canonical();
-            return tag.road().id.equals(cut.road.id)&&Math.abs(tag.offset()-cut.offset)<1e-5&&tag.start()<cut.end-1e-7&&tag.end()>cut.start()+1e-7;
+            return tag.road().id.equals(cut.road.id)&&sameRail(cut.offset,tag.offset())&&tag.start()<cut.end-1e-7&&tag.end()>cut.start()+1e-7;
         }
         var vertices=List.of(quad.a(),quad.b(),quad.c(),quad.d());double lo=Double.MAX_VALUE,hi=-Double.MAX_VALUE;
         for(V3 vertex:vertices){double at=cut.road.nearest(vertex);lo=Math.min(lo,at);hi=Math.max(hi,at);}

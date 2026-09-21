@@ -131,5 +131,10 @@
   "mtrpoint.guard_end_minus": "终点 -0.1m",
   "mtrpoint.guard_end_plus": "终点 +0.1m",
   "mtrpoint.guard_merge": "合并所选护轨",
-  "mtrpoint.guard_reset": "恢复自动护轨"
+  "mtrpoint.guard_reset": "恢复自动护轨",
+  "mtrpoint.guard_merge_rejected": "无法合并：所选护轨不在同一根钢轨上",
+  "mtrpoint.guard_merged": "护轨已合并为一根",
+  "mtrpoint.guard_merge_partial": "所选护轨不在同一条线上，已按各自股道延长（未合成一根）",
+  "mtrpoint.sleeper_isolate": "隔离枕木",
+  "mtrpoint.sleeper_isolation_cancel": "取消隔离枕木"
 }

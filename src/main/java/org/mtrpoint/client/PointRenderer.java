@@ -24,6 +24,17 @@ public final class PointRenderer {
     private static List<PointClient.View> knownViews=List.of();
     private static final Map<List<GuardSource>,Mesh> ASSEMBLIES=new LinkedHashMap<>();
     private static final Map<Mesh,PointGpu> ASSEMBLY_GPU=new IdentityHashMap<>();
+    /** Components of the current source list, in the order their quads are combined. */
+    private static List<List<GuardSource>> components=List.of();
+    /** Components whose assembly is still owed, oldest first. */
+    private static final List<List<GuardSource>> PENDING=new ArrayList<>();
+    /** Last mesh published per component identity (the sorted junction ids of its sources), so a
+     * component whose settings were just edited keeps drawing its previous steel until the new
+     * assembly is ready instead of popping the whole region's rails out for a frame. */
+    private static final Map<List<String>,Mesh> PUBLISHED=new LinkedHashMap<>();
+    /** Per-component meshes the current publish drew, in component order. A component still owing
+     * its assembly draws its previous mesh here. */
+    private static List<Mesh> DRAWN=List.of();
     private record Bounds(double x0,double x1,double z0,double z1){
         boolean overlaps(Bounds b){return x0<=b.x1&&b.x0<=x1&&z0<=b.z1&&b.z0<=z1;}
     }
@@ -41,22 +52,59 @@ public final class PointRenderer {
         Mesh mesh;
         void update(Mesh next,double frame){mesh=next;}
     }
-    public static void clear(){GPU.values().forEach(PointGpu::close);GPU.clear();knownViews=List.of();ASSEMBLY_GPU.values().forEach(PointGpu::close);ASSEMBLY_GPU.clear();ASSEMBLIES.clear();PRESERVED.clear();TEXTURES.clear();guardSources=List.of();GUARDS.mesh=null;}
-    private static void guards(List<PointClient.View> active){
+    public static void clear(){GPU.values().forEach(PointGpu::close);GPU.clear();knownViews=List.of();ASSEMBLY_GPU.values().forEach(PointGpu::close);ASSEMBLY_GPU.clear();ASSEMBLIES.clear();PUBLISHED.clear();PENDING.clear();components=List.of();PRESERVED.clear();TEXTURES.clear();guardSources=List.of();GUARDS.mesh=null;}
+    /** True while an edited component still owes its new assembly. */
+    static boolean pending(){return !PENDING.isEmpty();}
+    /** Full synchronous drain: the contract the runtime probe and the tests drive. */
+    private static void guards(List<PointClient.View> active){guards(active,-1);}
+    /**
+     * Re-derive the connected components of the active views and assemble what is owed.
+     *
+     * <p>{@code budget} caps how many components are baked by this call. The frame path passes one,
+     * so leaving a point editor never bakes a whole multi-component region in a single frame: an
+     * unchanged component keeps its cached mesh, and a changed one keeps publishing its previous
+     * mesh until its replacement is finished. The same views always produce the same components in
+     * the same order, so a fully drained amortised publish is quad-for-quad the from-scratch
+     * assembly of those views.
+     */
+    private static void guards(List<PointClient.View> active,int budget){
         var next=active.stream().map(v->new GuardSource(v,v.settings,v.profile,v.scissors)).distinct().toList();
-        if(next.equals(guardSources)&&GUARDS.mesh!=null)return;
-        guardSources=next;var boxes=next.stream().map(PointRenderer::bounds).toList();var components=new ArrayList<List<GuardSource>>();boolean[] used=new boolean[next.size()];
-        for(int i=0;i<next.size();i++)if(!used[i]){
-            var indices=new ArrayList<Integer>();indices.add(i);used[i]=true;
-            for(int k=0;k<indices.size();k++)for(int n=0;n<next.size();n++)if(!used[n]&&boxes.get(indices.get(k)).overlaps(boxes.get(n))){used[n]=true;indices.add(n);}
-            indices.sort(Integer::compareTo);components.add(indices.stream().map(next::get).toList());
+        boolean changed=!next.equals(guardSources);
+        if(changed){
+            guardSources=next;var boxes=next.stream().map(PointRenderer::bounds).toList();var found=new ArrayList<List<GuardSource>>();boolean[] used=new boolean[next.size()];
+            for(int i=0;i<next.size();i++)if(!used[i]){
+                var indices=new ArrayList<Integer>();indices.add(i);used[i]=true;
+                for(int k=0;k<indices.size();k++)for(int n=0;n<next.size();n++)if(!used[n]&&boxes.get(indices.get(k)).overlaps(boxes.get(n))){used[n]=true;indices.add(n);}
+                indices.sort(Integer::compareTo);found.add(indices.stream().map(next::get).toList());
+            }
+            components=found;
+            // A component already keyed in ASSEMBLIES was not affected by this change. Everything
+            // else is owed once, whatever else happens to the source list.
+            PENDING.clear();for(var component:components)if(!ASSEMBLIES.containsKey(component))PENDING.add(component);
         }
-        var retained=new LinkedHashMap<List<GuardSource>,Mesh>();Mesh combined=new Mesh();
-        for(var component:components){Mesh mesh=ASSEMBLIES.get(component);if(mesh==null){mesh=assemble(component);guardBuilds++;}retained.put(component,mesh);combined.quads.addAll(mesh.quads);}
-        ASSEMBLIES.clear();ASSEMBLIES.putAll(retained);var meshes=new HashSet<>(retained.values());
+        if(!changed&&PENDING.isEmpty()&&GUARDS.mesh!=null)return;
+        for(int done=0;!PENDING.isEmpty()&&(budget<0||done<budget);done++){
+            var component=PENDING.remove(0);
+            if(!ASSEMBLIES.containsKey(component)){ASSEMBLIES.put(component,assemble(component));guardBuilds++;}
+        }
+        var retained=new LinkedHashMap<List<GuardSource>,Mesh>();var published=new LinkedHashMap<List<String>,Mesh>();
+        var drawn=new ArrayList<Mesh>();Mesh combined=new Mesh();
+        for(var component:components){
+            var key=identity(component);Mesh mesh=ASSEMBLIES.get(component);
+            if(mesh==null)mesh=PUBLISHED.get(key);
+            // A region that has never been drawn has nothing to keep publishing; bake it now.
+            if(mesh==null){mesh=assemble(component);guardBuilds++;ASSEMBLIES.put(component,mesh);}
+            if(ASSEMBLIES.containsKey(component))retained.put(component,ASSEMBLIES.get(component));
+            published.put(key,mesh);drawn.add(mesh);combined.quads.addAll(mesh.quads);
+        }
+        ASSEMBLIES.clear();ASSEMBLIES.putAll(retained);
+        PUBLISHED.clear();PUBLISHED.putAll(published);DRAWN=List.copyOf(drawn);
+        var meshes=new HashSet<>(drawn);
         for(var it=ASSEMBLY_GPU.entrySet().iterator();it.hasNext();){var entry=it.next();if(!meshes.contains(entry.getKey())){entry.getValue().close();it.remove();}}
         GUARDS.update(combined,0);
     }
+    /** Component identity that survives an edit of the component's own settings. */
+    private static List<String> identity(List<GuardSource> component){return component.stream().map(source->source.view.junction.id()).sorted().toList();}
     private static Mesh assemble(List<GuardSource> next){
         var runs=new ArrayList<GuardRails.Run>();var cuts=new ArrayList<RailCuts.Cut>();var diamonds=new ArrayList<DiamondGeometry.Request>();
         var crossingOwned=new HashSet<String>();
@@ -70,6 +118,8 @@ public final class PointRenderer {
             if(run!=null)runs.add(run);
         }
         for(var source:next)if(source.group==null){
+            // A scissors component needs no cut here: ScissorsLayout.clip() already removes every
+            // face it owns inside the shared region, so the member rail is gone before the crossing.
             cuts.addAll(RailCuts.forJunction(source.view.junction,source.settings,source.profile));
             if(source.view.junction.kind()==Junction.Kind.DIAMOND){diamonds.add(new DiamondGeometry.Request(source.view.junction,source.settings,source.profile.tune(source.settings),PointMesh.extent(source.view.junction,source.settings)));crossingOwned.add(source.view.junction.id());}
             else {var crossing=DiamondGeometry.fixedY(source.view.junction,source.settings,source.profile.tune(source.settings),PointMesh.extent(source.view.junction,source.settings));if(crossing.isPresent()){diamonds.add(crossing.orElseThrow());crossingOwned.add(source.view.junction.id());}}
@@ -134,7 +184,7 @@ public final class PointRenderer {
         return result;
     }
     /** Compile fixed crossing steel after topology/settings changes, outside the frame renderer. */
-    public static void prepare(List<PointClient.View> views){guards(views.stream().filter(v->!v.styles.isEmpty()&&v.settings.enabled()).toList());}
+    public static void prepare(List<PointClient.View> views){guards(views.stream().filter(v->!v.styles.isEmpty()&&v.settings.enabled()).toList(),1);}
     public static void preserve(org.mtr.mod.resource.RailResource resource,boolean flip,V3 a,V3 b){
         var attachments=Profiles.attachments(resource.getId());if(attachments.isEmpty())return;
         V3 f=b.sub(a).unit(),n=f.lateral().mul(flip?1:-1),center=a.lerp(b,.5).add(0,resource.getModelYOffset(),0);double sign=flip?-1:1;
@@ -168,7 +218,7 @@ public final class PointRenderer {
             for(var it=GPU.entrySet().iterator();it.hasNext();){var item=it.next();if(!retained.contains(item.getKey())){item.getValue().close();it.remove();}}
         }
         var active=PointClient.views.stream().filter(v->!v.styles.isEmpty()&&v.settings.enabled()).toList();
-        for(Mesh mesh:ASSEMBLIES.values()){var gpu=ASSEMBLY_GPU.computeIfAbsent(mesh,k->new PointGpu());if(!gpu.visible(e))continue;gpu.update(mesh,0,false,false,false);gpu.draw(e);}
+        for(Mesh mesh:DRAWN){var gpu=ASSEMBLY_GPU.computeIfAbsent(mesh,k->new PointGpu());if(!gpu.visible(e))continue;gpu.update(mesh,0,false,false,false);gpu.draw(e);}
         for(var view:active){var gpu=GPU.computeIfAbsent(view,k->new PointGpu());if(gpu.hasSource(view.mesh)&&!gpu.visible(e))continue;Mesh mesh=view.mesh();boolean sharedFixedCrossing=view.scissors==null&&(view.junction.kind()==Junction.Kind.DIAMOND||view.junction.kind()==Junction.Kind.Y&&!view.settings.movableFrog());gpu.update(mesh,view.renderedPosition(),view.settings.movableFrog(),true,sharedFixedCrossing);gpu.draw(e);}
     }
     private static int partColor(String part,int normal){
@@ -196,4 +246,37 @@ public final class PointRenderer {
         var sources=active.stream().map(v->new GuardSource(v,v.settings,v.profile,v.scissors)).distinct().toList();
         return assemble(sources);
     }
+    /** Test access to the amortised publish path: a full drain, exactly as the world reaches it. */
+    static Mesh publishForTest(List<PointClient.View> active){
+        clear();
+        var eligible=active.stream().filter(v->!v.styles.isEmpty()&&v.settings.enabled()).toList();
+        for(int guard=0;guard<eligible.size()+2;guard++){
+            guards(eligible,1);
+            if(!pending())break;
+        }
+        if(pending())throw new IllegalStateException("Amortised assembly did not finish");
+        return GUARDS.mesh;
+    }
+    /** From-scratch reference for the amortised publish: the same components in the same order. */
+    static Mesh fromScratchForTest(List<PointClient.View> active){
+        var eligible=active.stream().filter(v->!v.styles.isEmpty()&&v.settings.enabled()).toList();
+        Mesh combined=new Mesh();
+        for(var component:split(eligible))combined.quads.addAll(assemble(component).quads);
+        return combined;
+    }
+    private static List<List<GuardSource>> split(List<PointClient.View> active){
+        var next=active.stream().map(v->new GuardSource(v,v.settings,v.profile,v.scissors)).distinct().toList();
+        var boxes=next.stream().map(PointRenderer::bounds).toList();var found=new ArrayList<List<GuardSource>>();boolean[] used=new boolean[next.size()];
+        for(int i=0;i<next.size();i++)if(!used[i]){
+            var indices=new ArrayList<Integer>();indices.add(i);used[i]=true;
+            for(int k=0;k<indices.size();k++)for(int n=0;n<next.size();n++)if(!used[n]&&boxes.get(indices.get(k)).overlaps(boxes.get(n))){used[n]=true;indices.add(n);}
+            indices.sort(Integer::compareTo);found.add(indices.stream().map(next::get).toList());
+        }
+        return found;
+    }
+    /** Test access to the published per-component meshes and the assembly counter. */
+    static List<Mesh> drawnForTest(){return DRAWN;}
+    static long buildsForTest(){return guardBuilds;}
+    static Mesh publishedForTest(){return GUARDS.mesh;}
+    static Map<List<GuardSource>,Mesh> assembliesForTest(){return ASSEMBLIES;}
 }

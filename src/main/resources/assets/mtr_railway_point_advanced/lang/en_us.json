@@ -131,5 +131,10 @@
   "mtrpoint.guard_end_minus": "End -0.1m",
   "mtrpoint.guard_end_plus": "End +0.1m",
   "mtrpoint.guard_merge": "Merge selected",
-  "mtrpoint.guard_reset": "Restore automatic"
+  "mtrpoint.guard_reset": "Restore automatic",
+  "mtrpoint.guard_merge_rejected": "Cannot merge: the selected guards are not one rail",
+  "mtrpoint.guard_merged": "Guards merged into one rail",
+  "mtrpoint.guard_merge_partial": "Selected guards are not one line: each was extended separately",
+  "mtrpoint.sleeper_isolate": "Isolate sleepers",
+  "mtrpoint.sleeper_isolation_cancel": "Cancel sleeper isolation"
 }

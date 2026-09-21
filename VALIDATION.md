@@ -1,5 +1,95 @@
 # 验证记录
 
+## 2026-09-21（续）：尖轨刨切改动撤回与四个未解决项（按现状记录）
+
+按用户要求，本轮**只撤回**尖轨（switch blade）的刨切／变尖渲染改动，并把目前仍然存在的实景问题原样记录在案：**不再做其他修改，按现状记录**（用户原话："不再做修改，按现状记录"）。
+
+撤回内容（仅此一项改动，其余修复全部保持原样）：
+
+- `geometry/Mesh.java`：`blade(V3,V3,V3,V3,Profile,PointSettings)` 恢复为改动前的行为——先生成完整原生截面，在该截面仍被刨切时用 `clipAnimated` 从基本轨一侧按竖直刨切面裁切；本次为横向缩放新增的 `scaleAnimated(...)` 及其 `edge(...)` 辅助方法一并删除。同文件 `railCap`／`railCutCap` 的端面轮廓与材质修正（`CapOutline`／`endOutline`）不受影响。
+- `geometry/TurnoutFrame.java`：`Blade` 记录恢复为 `(point,cut)`；`blade(...)` 恢复为按"自然横向间距 `separation < headWidth`"给出竖直刨切点、不再随开通位置判定的原逻辑；为此新增的 `separationDirection(...)`／`separated(...)` 删除。`start(...)` 与 `contact(...)` 未改动。
+- `geometry/PointMesh.java`、`geometry/ThreeWayMesh.java`：`mesh.blade(...)`／`m.blade(...)` 调用恢复为传入 `bladeA.cut()`／`bladeB.cut()`。`PointMesh.secondStart`、`NATIVE_CELL_REACH` 等其它改动未动。
+- 回归：原先固定"横向缩放"行为的断言 `PASS: a switch blade is planed by a lateral section scale about its running face, never cut, and a blade clear of its stock rail keeps its full section` 已替换为恢复后行为的等价断言 `PASS: a switch blade is planed by clipping its full native section from the stock-rail side, never tapered, and a blade clear of its stock rail keeps its full section`（完整原生截面 + 从基本轨一侧裁切，未刨切的尖轨保持完整截面；仍由独立组装的 `clipAnimated` 结果逐面比对）。
+
+撤回原因：该改动让尖轨渲染**更差**（用户实景反馈），因此恢复为改动前的实现。
+
+以下为**按现状记录的 OPEN、未解决问题**（均未修复）：
+
+1. **钢轨与护轨的切断端面仍然没有材质。** 端面已改为取原生模型 zMin 轮廓与自身 surface（`Mesh.railCap`／`railCutCap` 与原生模型轮廓／材质），但游戏内看仍然没有材质；待查。
+2. **合并护轨时**：中间那根护轨的终点有时会按预期 cancel out、有时有一个做不到；而合并完成后，**外侧两端**的终点反而被 cancel out（与预期相反）。
+3. **护轨偶尔仍有未按平交口切断的情况。** 此前已定位并修复"风格组不匹配则永远不被切"这一机制（见下文 2026-09-21 护轨切口一节），用户仍能观察到个别漏切；缺少具体场景，无法继续。
+4. **尖轨（switch blade）的刨切／变尖渲染改动已撤回**：该改动让尖轨渲染更差，恢复为改动前的实现（见上）。
+
+验证：完成撤回后运行门禁 `.\gradlew.bat regression build smokeJar --no-daemon --console=plain`，**BUILD SUCCESSFUL（exit code 0，58 s）**，共 **51 条 `PASS` 断言**全部通过（含既有几何回归、Forge 编译与重混淆打包）。撤回后 `git diff` 中与尖轨刨切／变尖相关的 hunk 已全部消失，其余修复保持不变：原生截断面（`Mesh.railCap`／`railCutCap` + 原生模型轮廓／surface）、护轨切口门限（`DiamondGeometry` 的 `overlapsVertically`／`Cut`／`atLevel`／风格组回退）、护轨高亮索引（`PointSelectionScreen`）、分摊式装配发布（`PointRenderer.guards(List,int)` + `PENDING` 队列、`SurfaceUnion` 优化）、`suppress` 所有权门控（`PointClient`）、`bank`（位置，自身股道）缓存（`RailSampler`），以及 `PASS: both outer turnout rails follow their own branch curve over 527 samples`。未 commit、未 push。
+
+## 2026-09-21（续）：选中护轨不再高亮（回归）
+
+编辑器 `preparePlan` 里 `GuardRails.merge(pool,owners)` 回报的来源是**池内索引**，而 `selectedGuards` 存的是**拾取全局索引** `base+i`（两者本来有 `poolOwners` 做映射，却没被使用），于是 `guardRunSelected` 永远为假：选中的护轨不变黄，`mergeGuards()` 里 `joined` 也恒为 0，状态提示跟着错。现在把 `owners` 经 `poolOwners` 翻译成全局索引再存进 `mergedOwners`。门禁 `regression build smokeJar` 通过。
+
+## 2026-09-21（续）：外侧轨连续性诊断与 bank 参考系修正（0.1.2）
+
+用户报告"无论尖轨在什么位置，最外侧的两条轨道总像按同一条路径曲线渲染再被切断"。做了两件事：
+
+**测量（只读，jshell 直接跑 `build/classes/java/main`，每 0.05 m 采样最终装配网格）**：在直线+曲线的不对称 Y、两组共用一条股道的双道岔、20°/17° 近接交分等夹具上，两条外侧轨各自都被单个 band 覆盖、采样点 0 缺失，标签（`Mesh.RailTag.road`）与实际采样股道一致；`FrogGeometry.mergeWings`（`FrogGeometry.java:147-165`）只在同一 `road().id` 上缝合，`PointMesh` 四条走行轨各自采样自身股道（`PointMesh.java:21,33-54,70`）。也就是说**在没有驼峰参考系（`RailSampler.SAMPLES` 为空、bank 原样返回）时复现不出来**，问题不在这些生成路径上。
+
+**已修**：`RailSampler.bank` 选参考系时只按最近几何、不校验股道身份（`RailSampler.java:77-82`），而 `Mesh.Quad.rail()` 本来就知道顶点属于哪条股道。这是唯一能把 A 股道顶点的坐标搬进 B 股道驼峰参考系（`bank.frame`）的环节，与尖轨位置无关，效果正是"轨被拉到另一条曲线上并从自己的面片里脱出（看着像被切断）"。现在带轨迹标签的顶点只用它**自己那条股道**的参考系（`byRoad.get(q.rail().road().id)`），无标签的面片（枕木、辙叉、尖轨、护轨）仍按最近几何；缓存只保留给无标签顶点，避免同一坐标在不同股道下取到错误缓存值。
+
+验证：`.\gradlew.bat regression build smokeJar --no-daemon --console=plain` 通过（1m 1s）。此修正只有在启用可选轨道驼峰（MTR 可选轨道/`mtr_optional_rail` 路径）时才会改变输出，回归无法覆盖该路径，需在游戏内确认；未 commit、未 push。
+
+**固化为回归断言**：`PointRendererAssemblyRegression` 新增外侧轨归因检查——对不对称 Y（直线 + 曲线，共用节点）走最终装配，沿**每条外侧轨自身股道**每 0.05 m 采样（三条横向偏移，避开面片接缝），要求该点被钢轨面片覆盖；只在两股道中心线相距 > 2·centerOffset+0.3 m 的区间采样，避免另一股道的轨顶足迹干扰。当前通过：527 个采样点全部覆盖（`PASS: both outer turnout rails follow their own branch curve over 527 samples`）。负面对照：把采样点改用对面股道的横向方向，断言立即失败（`An outer rail is not drawn on its own branch curve at V3[x=60.0, y=0.0, z=20.25]`）；恢复后门禁重新全绿。这条断言与可选轨道路径无关，能固定住"外侧轨必须按自身曲线生成"这一几何归因。
+
+## 2026-09-21（续）：卡顿与服务器负担优化（0.1.2）
+
+先做只读审计（客户端渲染/编辑器、服务端/网络，逐条 file:line），再按"影响/风险"实施低风险项。
+
+客户端：
+- `PointClient.tick` 原先**每 tick**调用 `nativeMovements()`，即遍历每辆车、每辆车再遍历**整条 path**（`PointClient.java:130-134`），并且 `index()` 每 tick 重建映射；现在每 4 tick 一次（栏木跟随本身慢于 0.2 s）。
+- `Detector.find` 每秒在客户端全量跑一次，原先每个 8 m 单元用 `x+":"+z` 字符串作 key，每对线段再拼一次 pair 字符串（每根轨道上千段 ⇒ 每秒大量短命字符串）；现在单元 key 用 long（`(long)x<<32 ^ z`，无分配且单射），并去掉那条 pair 去重集合——同一对线段即使跨两个单元被访问两次，交点也按四舍五入坐标在结果里被去重，语义不变。
+- `RailSampler.sample` 即使命中缓存也先 `writePositions` + 两次反射取节点；未装 Optional Rail 时缓存判定只依赖 `Rail` 实例（两个节点句柄恒为 null），现在先命中缓存直接返回；装了插件仍走原路径。全量重建每秒对每根邻近轨道调用一次。
+- 编辑器 `PointSelectionScreen.changeDraft` 原先每个按键、每个拖拽事件都完整跑 `preparePlan()`（重建所有视图网格 + `GuardRails.merge` 的 O(n²) 重采样 + 重新哈希整份蓝图线框）；现在只标脏，由下一帧合并重建一次；`previewNow()`（按钮/点击/添加枕木等离散动作）仍在同一事件内同步重建，接口契约不变。
+- 顺带修掉 `mergeGuards()` 里 `if(status!=null)return;` 恒真（`status` 初值是空串）导致的"护轨已合并为一根／已按各自股道延长"永远不显示。
+
+服务端与网络：
+- `BrObserver` 每 150 ms 读一次 BR 快照，原先每访问一个字段都 `getClass().getMethod(...)` 重新解析（每次扫描每条 traversal 至少一次）；现在按（类、方法名、参数个数）缓存 `Method`，`RouteRequestManager` 也解析一次。
+- `PointNetwork.flushMotion` 原先每 4 tick 把整份快照（最多 8192 条，每条 node + 两个约 101 字符轨道 id ≈ 322 B ⇒ 约 2.6 MB）广播给**整个维度**，无论维度里有没有人、有没有车在动；现在按玩家 256 格距离过滤，每名玩家只收到与自己相关的 movement，没有也发一张空表（客户端因此不会把"沉默"当成断流而切到等待态）。
+- 进服／切换维度原先每个外观条目发一个 `State` 包（上限 4096 个，各自 Gson 序列化，客户端每包扫描全部视图 ⇒ O(N·V)）；现在合成一个 `Batch` 包，客户端先写入全部设置再扫描一次视图；频道版本 3 → 4。
+
+验证：`.\gradlew.bat regression build smokeJar --no-daemon --console=plain` 全部通过。性能改动的正确性由既有回归约束（`Detector` 的 Y/三开/平交识别、`RailSampler` 采样与边界、护轨选择与合并、`PointRendererAssemblyRegression` 的覆盖断言）。**未做帧时实测**；审计中标为待实测的项（`RailRenderMixin` 每格 `suppress`、`PointGpu` 光照批次整批重传、`GuardRails.merge` 的 O(n²) 重采样、编辑器按视图增量重建）本次未实施。未 commit、未 push。
+
+## 2026-09-21（续）：护轨全量可选与合并状态提示（0.1.2）
+
+护轨可选性：编辑器原先只枚举 `GuardRails.forJunction`，平交（`DIAMOND`）返回空、三开（`THREE`）的护轨又刻意不进合并池，因此只有 Y 型两股内侧的护轨（蓝色）能选中，交点与三开的护轨虽被 `DiamondGeometry`／`ThreeWayMesh` 画出来却选不到；多来源护轨的两半无法同时选中，合并也就"看起来不生效"。现在统一走 `GuardRails.selectable(j,s,raw,group,boundary)`：平交用 `GuardRails.crossing`（编辑感知），三开用 `ThreeWayMesh.checkRuns`（交点护轨 + 每个道岔对的 `frog.guard`，与 `DiamondGeometry.three` 烘焙同源），Y 型仍用 `forJunction`；`GuardRails.edited(runs,s)` 成为唯一入口（先 `removeBladeSteel` 再 `applyEdits`），尖轨旁的基本轨（`isBladeAdjacent`）继续排除。三开的护轨改为在 `DiamondGeometry.three` 内经 `GuardRails.merge` 烘焙，与世界池化路径一致。
+
+合并语义：`mergeGuards()` 不再用 `mergeable` 拒绝，而是为每个选中护轨写入 `GuardEdit(start,end,flareStart,flareEnd,group)`（各股取全部选中护轨端点在自身道路上的并集，`end<=start+.05` 才算拒绝），并报告 `mtrpoint.guard_merged`（并成一根）或 `mtrpoint.guard_merge_partial`（各股分别延长）；`mtrpoint.guard_merge_rejected` 保留给退化区间。几何合并 `GuardRails.merge` 本身未放宽：仍要求同侧、同断面／同竖向偏移、横向位置在 1e-5 或双方同组时的 `mergeTolerance` 内，接缝 ≤1e-7（自动）或 `MANUAL_GAP=0.25`（同组），并只保留并集最外两端的外撇（`merge()` 现在从拥有该端点的 run 取 flare，修掉了原先恒取一侧的无效三元式）。
+
+实景反馈的三处收尾（本次）：平交点选绑定、合并带跳过钢轨切口、内部接缝留下端面。
+
+点选绑定：编辑器原先把"合并后的护轨"与"选中的护轨"用**几何邻近**对应（在合并轨道上取样选中护轨的中心线，距离在 `mergeTolerance` 内就算选中），而平交处两条方向不同的护轨在交点附近本来就落在这个容差里（20° 交叉时同侧两条护轨的中心线相距约 0.12 m），于是一次点击点亮相交的多条护轨。现在 `GuardRails.merge(input,sources)` 额外回报每条并合轨由哪些输入 run 得到，编辑器按 `mergedOwners` 做**来源匹配**（`guardRunSelected(int)`），只有真正被合并进去的选中项才算选中；`merge` 的合并规则本身未动。
+
+护轨切口：`DiamondGeometry.bakeLayer` 里 guard 断面在两侧道路相差 >5 mm 时会 `continue` 掉**整条**裁剪，而 `Detector` 允许平交的两条道路相差 80 mm，于是"护轨钢穿过本该切开的走行轨"在实景里普遍存在。现在 5 mm 判定只留在"等距离接缝归一个所有者"那一支（两根在平面内重合但不同高度的钢轨本来就不是同一根），相交/楔形减料支改用 `overlapsVertically`：只要两根钢轨的**截面在竖直方向可能重叠**（基准线高差小于一个轨高）就必须被切断，只有高出一整个截面的钢轨才让下方的护轨完整保留。
+
+内部端面：`DiamondGeometry.path(GuardRails.Run,…)` 与 `convert()` 原先无条件给每个 run 的两端设 `first/last`、`capStart/capEnd`，因此 `exposeEnds` 已经判定为"内部"的端面仍被烘焙出来；现在两者都跟随 `flareStart/flareEnd`（只有露出的端头才有端面），legacy 路径 `appendChecks` 也补上了 `exposeEnds`，与世界池化路径一致。另修 `coveredEnd` 的注释与 `path` 的取样口径说明（切向比较取绝对值，节点顺序相反的两条道路仍算同一根钢轨）。
+
+验证：`.\gradlew.bat regression build smokeJar --no-daemon --console=plain` 全部通过。新增断言 `PASS: a crossing cuts its check rails at every height the two sections still overlap, and never cuts one that runs clear underneath`：平交夹具在 Δy=0 与 Δy=75 mm 下护轨的水平投影面积都必须小于 Δy=400 mm（截面不可能重叠，护轨完整）的面积；负面对照把旧的 5 mm 门限放回循环顶部后该断言立即失败（`6.118223749619834 vs 6.118223749619834 m2`，即 75 mm 那组完全没被切），恢复后重新全绿。`checkGuardMerge` 另加两条：`merge(...,sources)` 的来源集合必须是 `{0,1}`（并成一根）或 `{0},{1}`（各自独立），以及"同一根钢轨从节点顺序相反的两条道路取样时不留下内部开口"。未运行游戏内探针，未 commit、未 push。
+
+验证（护轨可选性）：新增断言 `PASS: every crossing and fan check rail is selectable, and a manual station reaches its baked steel`（平交 20°／90° 与三开都要求 `selectable` 非空、不含尖轨旁基本轨，且索引 0 的 `GuardEdit` 必须改变 `DiamondGeometry.combine`／`PointMesh.build` 的烘焙结果）。本节取代下一节中"否则拒绝"的护轨合并语义；`guard_merge_rejected` 仍保留在三语语言文件中。
+
+## 2026-09-21：护轨合并拒绝与切区契约（0.1.2；护轨"拒绝"语义已被上一节取代）
+
+护轨合并（`GuardRails.merge`）原先只按同一条路、同高度和近似断面合并，两个选中的护轨即使相距数米（Y 型道岔两侧外护轨相距 2.334 米）也会被并成一根，并在结果里删掉被覆盖的一段。现在合并前要求两条护轨确实是同一根钢轨：同一条路时横向位置必须一致（1e-5），跨路时必须把较短的一条取样到另一条路上，切向点积 ≥0.999 且距离不超过 `mergeTolerance`；手动合并的区间只允许留 `MANUAL_GAP=0.25` 的空隙（原先用包含关系判断，长轨跟随短轨时会漏判）。不满足时报 `mtrpoint.guard_merge_rejected`（三语）并拒绝，不再改动任何护轨。编辑器预览原先完全看不到护轨，现在合并后的护轨以青色画进预览，并沿用世界装配的剪刀区裁切；护轨高亮也用合并后的区间判断。
+
+交点切面（`RailCuts`／`DiamondGeometry`）经只读复核查证后**未改**。把三层真实截面交点（`RailSection.conflicts`）与实发切区逐段对比：Y 型夹具的轨底交点区间 `[9.4407,9.8998]` 包含轨腰 `[9.6362,9.7093]` 与轨头 `[9.5587,9.7940]`，即"单一区间"取自最宽层，并不额外多切；实际下发的是 `[8.22,11.00]`，比真实交点宽是设计使然（辙叉钢占据 toe..heel）。端面 `Mesh.railCutCap` 的 12 点轮廓恰好是内置工字钢三层矩形之和，既有 `checkCutCap` 已用 `footWidth*.025+.022*(railHeight-.025-.036)+headWidth*.036` 的面积契约与顶点横向档位约束它。另外实测菱形视图内带 `RailTag` 的走行轨面为 **0**，`RailCuts.forJunction(DIAMOND)` 的 4 条切区在本视图里空转，平交钢轨完全由 `DiamondGeometry` 生成；因此"把 `RailCuts` 改成按层挖孔"不会改变菱形外观，只会让区间变窄（与实景"钢轨未切断"方向相反），并会破坏 8 条硬契约（`AssemblyRegression` 的端面共面、合并孔内部为空、不得留内部端帽、端面总面积、`cut=toe/heel`，`DiamondRegression` 的 `frog_wall` 三层 band）。该改法已被否决。
+
+真正的漏切来自切区匹配：`RailCuts` 原先要求候选钢轨的 `profile` 完全相等、横向 offset 相差 <1e-5 且 `verticalOffset` 完全相等，才认领一段钢轨。同一根共用钢轨两侧的两个道岔视图各自保存外观，任一视图改了轨距／轨头宽度／轨顶高度后，两条钢轨中心线相差几厘米、断面不同，或只有高度不同，于是另一视图的辙叉断口永远落不到这段钢轨上，断口被连续钢轨跨过。现在 `RailCuts.sameRail` 只按"钢轨位于道路的哪一侧"认领（两根走行轨相距一个轨距，靠得更近的一侧才是同一根），端面始终用该段自己的断面与 offset 生成，`assemble` 不再要求断面或高度相等（裁剪平面是竖直的，高度只是同一根钢轨的外观偏移；无 tag 分支本来就忽略高度）。回归新增两组正反对照（轨头宽度覆盖、竖向偏移各一组）：带外观覆盖的邻段钢轨必须被切掉，对侧走行轨必须完好；把 `sameRail` 换回精确比较或把高度判据加回去时，该断言分别立即失败（`A neighbouring appearance override left steel across the frog`）。
+
+原先无人引用的 `RailSection` 现在承担切区契约：`Regression.checkCrossingCutCoverage` 用 `RailSection.conflicts` 逐层求出交叉轨对的真实交点区间，要求每一段都落在实发切区内（Y 型夹具 + 20°／90° 平交，共 54 段真实交点区间）。同节点两分支同侧钢轨在节点附近的擦碰属于同一根外轨，不参与该契约。
+
+另核查交叉渡线分组视图：`PointRenderer` 原先只对 `group==null` 的视图收集切区，看起来会让成员道岔的走行轨在共享区内漏切。实测把分组视图的切区也收集进来后，最终装配在断口内的钢层数与不收集时**完全一致**（单开／交叉渡线为 1 层，交叉渡线共享区内为 2–3 层，来源是共享区中心平交钢的合法重叠），而 `ScissorsLayout.clip` 已把分组视图位于共享区内的全部面裁掉，成员钢轨在该区域本就不存在，所以该条件是刻意设计，未改动；已在 `PointRenderer` 留下注释说明。另外，用"切区里程标签与残留面重叠"来判定漏切会**误报**：交叉渡线裁剪面的标签区间比其实际几何更宽（`PointRenderer` 内已有注释说明），必须改用与坐标系无关的几何采样。
+
+仍未改动、需游戏内复核后再动的部分：`DiamondGeometry` 的 span 以最宽层宽度 `sectionWidth=max(footWidth,headWidth)` 生成，接缝刀与切面墙平面由此推出；要让浅交角下的层间封板也逐层收窄，需改成每条 span 携带各层宽度并用 `RailSection.conflicts` 提供真实交点站点，同时重新标定上述 8 条硬契约。此项保持 2026-09-17 记录的未解决状态。
+
+验证：`.\gradlew.bat regression build smokeJar --no-daemon --console=plain` 全部通过（含几何回归、Forge 编译与重混淆打包），新增 `PASS: crossing cuts cover every per-layer section conflict (54 real conflict intervals; diamond views keep 0 tagged running-rail faces...)`、`PASS: a crossing cut reaches a neighbour rail moved by appearance overrides and spares the opposite rail` 与 `PASS: guard merge joins one physical rail only, keeps only the outer mouths and never bridges rails metres apart`（原为"…and refuses a Y pair metres apart"；编辑器的"拒绝"已改为提示，见上一节）。关键修复均做了反向对照：把匹配换回旧判据、去掉任一条断言时对应用例立即失败。未运行游戏内探针，未 commit、未 push。
+
 ## 2026-09-20：统一复杂岔区编辑器（里程碑 1，0.1.2）
 
 `PointSelectionScreen` 从“导航用选择图”改为统一复杂岔区编辑器：整组当前外观始终可见，点击道岔只在该视图中原地选中，不再跳转到二级 `BlueprintScreen`。选中后右侧出现与原蓝图一致的逐道岔外观控制（四个分页、轨型切换、可动岔心／启用、枕木模式与参考路径、恢复自动、撤销、保存），改动作用到该道岔并刷新整组预览；原有全局枕木选择、拖动、保存与撤销保持可用。多道岔布局底部新增编号开关，编号可见时为“隐藏编号”，隐藏后为“显示编号”，三语（zh_cn／ja_jp／en_us）同步，默认可见。隐藏编号会同时隐藏编号、黑色底框、选中外框和底部编号导航块，使轨道、护轨与枕木保持无遮挡；预览线段在 CPU 侧严格裁切到视口，避免 UI 缩放时越界。护轨可直接选择并调整首尾长度，Ctrl 多选后可合并绘制；枕木命中只使用枕木实体，不再把钢轨下方扣件计入碰撞区。`TurnoutPanel` 抽出原 `BlueprintScreen` 的控件构建、数值编辑、枕木规则、菜单与保存报文校验，两个入口共用同一套设置规则；`BlueprintScreen` 类、数据格式与 `mtrpoint.select_back` 返回路径保留。几何仍在外观变化时一次性重建，未新增逐帧计算。
@@ -239,3 +329,19 @@ BRsignal 0.1.2 在不带 Connector 的纯 Forge 测试世界启动时，其现�
 本项目只读 MTR 曲线、样式、客户端路径以及 BRsignal 公布的快照。Mixin 只观察 Simulator tick、读取字段、替换轨道外观回调并提交生成网格。没有写入 MTR 图连接、PathData、寻路结果、BR 授权、轨道可视化映射或信号状态。外观参数保存在本 Mod 独立的 `mtrpoint_appearance` SavedData 中。
 
 正式交付文件：`build/libs/mtr_railway_point_advanced-0.1.0.jar`。不要安装 `point-runtime-probe-0.1.0.jar` 到真实游戏。真实客户端 mods 目录和用户存档未修改。
+
+## 2026-09-18 编辑器退出卡顿、快速行驶卡顿与合并护轨漏切
+
+三处修复，几何结果均与修复前逐面相同。
+
+1. 退出编辑器不再一次性重烘整个区域：`PointRenderer` 每帧只组装一个组件（`prepare(...,1)`，`PointClient.tick` 在 `pending()` 时继续排空），未受影响的组件保留缓存网格，正在重烘的组件继续用 `PUBLISHED` 里的旧网格绘制，不会闪空。`SurfaceUnion` 消除了逐候选面分配 `List.of`/`Stream` 并复用网格单元键，主导阶段 `SurfaceUnion.build` 由 1040 ms 降到 830 ms（直线剪式夹具，55k 输入面），输出不变。
+   - 断言：`PASS: the amortised publish of a crossing component equals the from-scratch assembly quad for quad`、`PASS: two guard edits rebuild one component per frame, keep the untouched component and drain to the from-scratch assembly`。
+   - 反证：把预算改为整轮排空 → `One amortised prepare call rebuilt 2 of 2 edited components instead of 1`；发布时优先取旧网格 → `Amortised publish after a guard edit is not the from-scratch assembly of the same views`。
+2. 每帧每格的 `PointClient.suppress`：先按轨道是否被任何视图拥有做门控，再做样式 ID 归一化，并按样式缓存归一化结果；`RailSampler.bank` 对带标签顶点恢复 (坐标, 自身股道) 缓存，每顶点仍用自己股道的超高框架。
+   - 断言：`PASS: the suppression gate answers exactly like the pre-gate scan for every rail, style and position, and an unowned rail never normalises a style`、`PASS: a tagged rail vertex is banked once per (position, road) pair and every vertex still lands in its own road's frame`。
+   - 反证：去掉所有权门控 → `A rail no view owns still normalised the style id before the ownership gate`；关闭缓存 → `Tagged banking ran 12757 times for 2136 own-road and 6349 shared vertices`。
+3. 合并护轨漏切：新增 20° 平交＋共用股道 Y 道岔夹具（跨节点双源护轨，`multiSource>0`），用「平交钢轨轨头带覆盖护轨轨头范围」的窗口采样比较合并（pooled）烘焙与合并前（legacy）烘焙保留的钢料。
+   - 断言：`PASS: a merged cross-junction check run keeps exactly the steel the legacy bake keeps where the crossing rail covers it`。
+   - 反证：禁止护轨被 running rail 切断 → `The pooled bake of the merged check run kept more steel than the legacy bake where the crossing rail covers it`。
+   - 实测：本夹具下合并与未合并保留量完全一致（Δy=0 时 460/1094，Δy=50 mm 时 193/1094），因此未能复现用户原存档的漏切；已定位但仍未修复的疑点：样式（截面／高度）与任何平交分组都不匹配的护轨会落到 `DiamondGeometry.guards(remaining)`，该分支的 span 列表里没有任何平交钢轨，注定不会被切断；`combine()` 里跳过 `GuardRails.exposeEnds` 在本套回归里没有任何可见变化。
+

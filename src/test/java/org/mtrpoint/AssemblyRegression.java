@@ -110,6 +110,7 @@ final class AssemblyRegression {
         wingIntervals();
         sharedFixedY();
         cutFrames();
+        checkNeighbourOverrideCuts();
         externalGuardWingJoin();
         incomingWingExcluded();
         System.out.println("PASS: partial/short guard union "+samples+" samples; coordinated tagged rail cuts and node-centred outer rails; guard/wing end caps; cross-ID guard/wing join; final support coverage/duplicates; diagonal V arms; graded moving stretcher");
@@ -330,5 +331,31 @@ final class AssemblyRegression {
         double expectedArea=p.footWidth()*.025+.022*(p.railHeight()-.025-.036)+p.headWidth()*.036;
         if(Math.abs(area-expectedArea)>1e-8)throw new AssertionError("Cut end face fills an I-section notch or overlaps itself at "+boundary+": "+area+" != "+expectedArea);
         if(expected.sub(road.at(boundary)).length()<.5)throw new AssertionError("Cut frame collapsed onto the road centre line at "+boundary);
+    }
+    /** Two views that meet on one shared rail may carry different appearance overrides. The
+     * override moves the neighbour's rail by centimetres or raises it, but the frog gap this view
+     * cuts belongs to that rail too: matching the hole by exact offset, profile or height would
+     * leave continuous steel across the crossing, while the opposite rail must stay untouched. */
+    private static void checkNeighbourOverrideCuts(){
+        for(PointSettings altered:List.of(PointSettings.DEFAULT.with(10,.09),PointSettings.DEFAULT.with(11,.1)))checkNeighbourOverride(altered);
+        System.out.println("PASS: a crossing cut reaches a neighbour rail moved by appearance overrides and spares the opposite rail");
+    }
+    private static void checkNeighbourOverride(PointSettings altered){
+        Profile p=Profile.STANDARD;PointSettings plain=PointSettings.DEFAULT;
+        Profile tuned=p.tune(altered);
+        var left=new ArrayList<V3>();var right=new ArrayList<V3>();
+        for(int i=0;i<=120;i++){double z=i*.25,curved=.008*z*z;left.add(new V3(-curved,0,z));right.add(new V3(curved,0,z));}
+        Track a=new Track("override-a","0,0,0","-7,0,30",left),b=new Track("override-b","0,0,0","7,0,30",right);
+        Junction j=new Junction("override",Junction.Kind.Y,a,b,new V3(0,0,0),0,0,30);
+        RailCuts.Cut cut=RailCuts.forJunction(j,plain,p).stream().filter(c->c.road().id.equals(a.id)).findFirst().orElseThrow();
+        double centre=(cut.start()+cut.end())/2,sign=cut.offset()<0?-1:1,offset=sign*tuned.centerOffset();
+        if(Math.abs(offset-cut.offset())<.005&&altered.verticalOffset()==plain.verticalOffset())throw new AssertionError("Override fixture does not move the neighbour rail");
+        V3 probe=a.at(centre).add(a.tangent(centre).lateral().mul(cut.offset()));
+        Mesh neighbour=RailCuts.assemble(List.of(new RailCuts.Segment(a,Math.max(0,cut.start()-3),Math.min(a.length,cut.end()+3),offset,tuned,altered)),new Mesh(),List.of(cut));
+        if(DiamondRegression.coverage(DiamondRegression.tops(neighbour,p.top()+altered.verticalOffset()),probe.add(0,altered.verticalOffset(),0))!=0)throw new AssertionError("A neighbouring appearance override left steel across the frog");
+        Mesh opposite=RailCuts.assemble(List.of(new RailCuts.Segment(a,Math.max(0,cut.start()-3),Math.min(a.length,cut.end()+3),-offset,tuned,altered)),new Mesh(),List.of(cut));
+        var oppositeTops=DiamondRegression.tops(opposite,p.top()+altered.verticalOffset());
+        for(double at:new double[]{cut.start()+.4,centre,cut.end()-.4})
+            if(DiamondRegression.coverage(oppositeTops,a.at(at).add(a.tangent(at).lateral().mul(-offset)).add(0,altered.verticalOffset(),0))!=1)throw new AssertionError("A frog cut removed the opposite running rail at "+at);
     }
 }

@@ -107,6 +107,106 @@ public final class PointRendererAssemblyRegression {
         }
         require(guardSamples>500,"Guard fixture too thin to prove anything: "+guardSamples);
         System.out.println("PASS: pooled final assembly keeps "+crossingSamples+" crossing and "+guardSamples+" guard samples with no duplicate check steel");
+
+        // The two outermost rails of a turnout must each be drawn along their OWN branch curve. A rail
+        // generated on the other branch's curve instead leaves its own curve uncovered and doubles the
+        // other one, so sweeping each outer rail's own centre line in the final assembly is a direct
+        // test of that requirement, independent of what the switch blades are doing.
+        Mesh outer=PointRenderer.assembleForTest(List.of(PointRenderer.view(guardJunction,PointSettings.DEFAULT,p,PointMesh.build(guardJunction,PointSettings.DEFAULT,p,0),null)));
+        var outerTops=tops(outer);
+        require(!outerTops.isEmpty(),"Outer-rail fixture has no steel at all");
+        double extent=PointMesh.extent(guardJunction,PointSettings.DEFAULT),side=TurnoutFrame.side(guardJunction,extent);
+        int outerSamples=0;
+        for(int branch=0;branch<2;branch++){
+            Track own=branch==0?guardJunction.a():guardJunction.b();
+            Track other=branch==0?guardJunction.b():guardJunction.a();
+            // PointMesh draws branch 0 at -side and branch 1 at +side; those are the outer rails.
+            double sign=branch==0?-side:side;
+            for(double d=.5;d<extent-.5;d+=.05){
+                V3 center=own.at(d);
+                // Only where the two branches are far enough apart for their head footprints not to
+                // overlap, otherwise a point could be covered by the other branch's rail as well.
+                if(center.distance(other.at(other.nearest(center)))<2*p.centerOffset()+.3)continue;
+                V3 lateral=own.tangent(d).lateral();
+                // Three offsets instead of the exact centre line: a valid tessellation may put a seam
+                // there, and a rail drawn on the wrong curve misses all three.
+                boolean covered=false;
+                for(double o:new double[]{-.02,0,.02})if(coverage(outerTops,center.add(lateral.mul(sign*p.centerOffset()+o)))>0){covered=true;break;}
+                require(covered,"An outer rail is not drawn on its own branch curve at "+center);
+                outerSamples++;
+            }
+        }
+        require(outerSamples>400,"Outer-rail fixture too thin to prove anything: "+outerSamples);
+        System.out.println("PASS: both outer turnout rails follow their own branch curve over "+outerSamples+" samples");
+
+        // The frame path publishes a component at a time and keeps the previous mesh of a component
+        // that is still owed its new bake, so leaving a point editor never bakes a whole region in
+        // one frame. What must not change is the steel: a fully drained amortised publish has to be
+        // the from-scratch assembly of the same views, quad for quad.
+        var crossingView=PointRenderer.view(diamond,PointSettings.DEFAULT,p,PointMesh.build(diamond,PointSettings.DEFAULT,p,0),null);
+        var pooledView=PointRenderer.view(guardJunction,PointSettings.DEFAULT,p,PointMesh.build(guardJunction,PointSettings.DEFAULT,p,0),null);
+        var pooled=List.of(crossingView,pooledView);
+        require(PointRenderer.publishForTest(pooled).quads.equals(PointRenderer.fromScratchForTest(pooled).quads),
+            "Amortised publish of one crossing component is not the from-scratch assembly");
+        System.out.println("PASS: the amortised publish of a crossing component equals the from-scratch assembly quad for quad");
+
+        // Two distant components, both guard-edited: the frame path may bake only one per call, the
+        // untouched one keeps its exact mesh, and the drained result still equals a fresh assembly.
+        long before=PointRenderer.buildsForTest();
+        crossingView.settings=crossingView.settings.with(17,.3);
+        pooledView.settings=pooledView.settings.with(17,.3);
+        PointRenderer.prepare(pooled);
+        require(PointRenderer.buildsForTest()==before+1,"One amortised prepare call rebuilt "+(
+            PointRenderer.buildsForTest()-before)+" of 2 edited components instead of 1");
+        require(PointRenderer.pending(),"One amortised prepare call finished every edited component in a single frame");
+        for(int pass=0;pass<8&&PointRenderer.pending();pass++)PointRenderer.prepare(pooled);
+        require(!PointRenderer.pending(),"Amortised assembly never finished");
+        require(PointRenderer.buildsForTest()==before+2,"Edited components were rebuilt "+(
+            PointRenderer.buildsForTest()-before)+" times instead of once each");
+        require(PointRenderer.publishedForTest().quads.equals(PointRenderer.fromScratchForTest(pooled).quads),
+            "Amortised publish after a guard edit is not the from-scratch assembly of the same views");
+        // One component edited again, its neighbour untouched: the neighbour's exact mesh must
+        // survive, otherwise an edit anywhere drags every distant region through a rebake.
+        var kept=new HashSet<>(PointRenderer.assembliesForTest().values());
+        crossingView.settings=crossingView.settings.with(18,.2);
+        PointRenderer.prepare(pooled);
+        for(int pass=0;pass<8&&PointRenderer.pending();pass++)PointRenderer.prepare(pooled);
+        require(kept.stream().anyMatch(mesh->PointRenderer.assembliesForTest().containsValue(mesh)),
+            "Editing one component discarded an unchanged component's cached assembly");
+        System.out.println("PASS: two guard edits rebuild one component per frame, keep the untouched component and drain to the from-scratch assembly");
+
+        // A turnout hides the native rail models of the region it covers, and a native model is
+        // hidden by its own centre. The first model that survives therefore reaches up to one cell
+        // behind that centre, so a covering rail that ends exactly where the hidden region does
+        // leaves a bare stretch of track: the covering steel has to reach one native cell further
+        // and it has to start at the junction start, where the hidden models begin.
+        // Half the diagonal of a one-block native rail model: a surviving cell can start this far
+        // behind its own centre, so the covering steel must reach at least this far past the hidden
+        // region. The bound is derived from the block geometry and not from the production constant,
+        // so shrinking that constant is what this assertion catches.
+        double reach=extent+.7072;
+        var covered=new HashMap<String,double[]>();
+        for(var quad:outer.quads){
+            var tag=quad.rail();
+            if(tag==null)continue;
+            boolean first=tag.road().id.equals(guardJunction.a().id);
+            Track source=first?guardJunction.a():guardJunction.b();
+            double station=first?guardJunction.sa():guardJunction.sb();
+            // The pooled assembly canonicalises a segment by node order, so the junction's own node is
+            // not station 0 of the road the final tag names: it is whichever end the node became.
+            double node=source.startNode.compareTo(source.endNode)>0?tag.road().length-station:station;
+            double near=Math.min(Math.abs(tag.start()-node),Math.abs(tag.end()-node)),far=Math.max(Math.abs(tag.start()-node),Math.abs(tag.end()-node));
+            double[] span=covered.computeIfAbsent(tag.road().id,k->new double[]{near,far});
+            span[0]=Math.min(span[0],near);span[1]=Math.max(span[1],far);
+        }
+        for(int branch=0;branch<2;branch++){
+            Track own=branch==0?guardJunction.a():guardJunction.b();
+            double[] span=covered.get(own.id);
+            require(span!=null,"The covering mesh has no tagged steel for branch "+own.id);
+            require(span[0]<=1e-6,"The covering steel does not start at the junction start on "+own.id+": "+span[0]);
+            require(span[1]>=reach-1e-6,"The covering steel stops short of the native cells it hides on "+own.id+": reaches "+span[1]+", needs "+reach);
+        }
+        System.out.println("PASS: covering turnout steel spans the junction start and one native rail cell past the hidden region");
     }
 
     /** Does the assembled mesh own a face of this part under the query point? */
@@ -150,3 +250,6 @@ public final class PointRendererAssemblyRegression {
         return points;
     }
 }
+
+
+

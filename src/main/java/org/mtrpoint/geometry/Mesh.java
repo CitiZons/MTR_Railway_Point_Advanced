@@ -51,12 +51,15 @@ public final class Mesh {
      * I-beam end face keeps its concave notches empty instead of filling them. */
     public void railCap(V3 center,V3 tangent,double taper,Profile p,PointSettings s,String part,boolean start){
         ModelDetail detail=p.detail();if(detail==null||detail.rails().isEmpty())return;
-        var loops=endOutline(detail);if(loops.isEmpty())return;
+        var outlines=endOutline(detail);if(outlines.isEmpty())return;
         V3 normal=normalFor(tangent);double width=p.headWidth()/detail.headWidth();
-        for(List<V3> loop:loops){
-            var shape=new ArrayList<V3>(loop.size());
-            for(V3 v:loop)shape.add(new V3((v.x()-detail.railCenter())*width*taper,v.y()-detail.railTop()+p.top()+s.verticalOffset(),0));
-            cap(center,normal,shape,p.steel(),part,start);
+        for(CapOutline outline:outlines){
+            var shape=new ArrayList<V3>(outline.loop().size());
+            for(V3 v:outline.loop())shape.add(new V3((v.x()-detail.railCenter())*width*taper,v.y()-detail.railTop()+p.top()+s.verticalOffset(),0));
+            // The native section is closed with its own material: the faces that form the zMin
+            // outline already carry the model's texture, and the mod's plain steel is only the
+            // fallback for a profile whose detail carries no surface at all.
+            cap(center,normal,shape,outline.surface()==null?p.steel():outline.surface(),part,start);
         }
     }
     /** Close a cut in a stock rail, including the built-in three-part profile. */
@@ -126,28 +129,32 @@ public final class Mesh {
     }
     private static double turn(V3 a,V3 b,V3 c){return (b.x()-a.x())*(c.y()-a.y())-(b.y()-a.y())*(c.x()-a.x());}
     private static boolean inside(V3 p,V3 a,V3 b,V3 c){return turn(a,b,p)>=-1e-12&&turn(b,c,p)>=-1e-12&&turn(c,a,p)>=-1e-12;}
+    /** One closed outline of the model's zMin section, with the surface of the native faces that
+     * form it, so a cut face is drawn with the rail's own material instead of the mod's steel. */
+    private record CapOutline(List<V3> loop,Profile.Surface surface){}
     /** Boundary of a custom rail model's end section, read from the edges that lie on zMin. Each
      * edge is counted once and followed into the sharpest remaining turn, so touching faces of
      * the section merge into the outline of their union and separate pieces stay separate. */
-    private static List<List<V3>> endOutline(ModelDetail detail){
+    private static List<CapOutline> endOutline(ModelDetail detail){
         double edge=detail.zMin(),epsilon=Math.max(1e-6,(detail.zMax()-detail.zMin())*1e-4);
-        var points=new ArrayList<V3>();var ids=new LinkedHashMap<String,Integer>();var edges=new LinkedHashSet<Long>();
+        var points=new ArrayList<V3>();var ids=new LinkedHashMap<String,Integer>();var surfaces=new LinkedHashMap<Long,Profile.Surface>();
         for(var q:detail.rails()){var corners=List.of(q.a(),q.b(),q.c(),q.d());
             for(int i=0;i<4;i++){
                 V3 a=corners.get(i),b=corners.get((i+1)%4);
                 if(Math.abs(a.z()-edge)>epsilon||Math.abs(b.z()-edge)>epsilon)continue;
                 int first=key(points,ids,a),second=key(points,ids,b);
-                if(first!=second)edges.add(join(first,second));
+                if(first!=second)surfaces.putIfAbsent(join(first,second),q.surface());
             }
         }
+        var edges=new LinkedHashSet<>(surfaces.keySet());
         if(edges.isEmpty())return List.of();
         var incident=new LinkedHashMap<Integer,List<Integer>>();
         for(long id:edges){int a=(int)(id>>32),b=(int)id;incident.computeIfAbsent(a,k->new ArrayList<>()).add(b);incident.computeIfAbsent(b,k->new ArrayList<>()).add(a);}
-        var used=new HashSet<Long>();var loops=new ArrayList<List<V3>>();
+        var used=new HashSet<Long>();var loops=new ArrayList<CapOutline>();
         for(long id:edges){
             if(used.contains(id))continue;
             int from=(int)(id>>32),current=(int)id;used.add(id);
-            var loop=new ArrayList<V3>();loop.add(points.get(from));
+            var loop=new ArrayList<V3>();loop.add(points.get(from));var taken=new ArrayList<Profile.Surface>();taken.add(surfaces.get(id));
             for(int guard=edges.size()+1;guard>0;guard--){
                 loop.add(points.get(current));
                 V3 back=points.get(current).sub(points.get(from));int next=-1;double best=Double.MAX_VALUE;
@@ -158,12 +165,21 @@ public final class Mesh {
                     if(bend<best){best=bend;next=candidate;}
                 }
                 if(next<0)break;
-                used.add(join(current,next));from=current;current=next;
+                long step=join(current,next);used.add(step);taken.add(surfaces.get(step));from=current;current=next;
                 if(current==(int)(id>>32))break;
             }
-            if(loop.size()>=3)loops.add(loop);
+            if(loop.size()>=3)loops.add(new CapOutline(loop,dominant(taken)));
         }
         return loops;
+    }
+    /** The material most of one outline's own edges are drawn with; ties keep the first edge's. */
+    private static Profile.Surface dominant(List<Profile.Surface> surfaces){
+        Profile.Surface best=null;int count=0;
+        for(Profile.Surface candidate:surfaces){
+            int hits=0;for(Profile.Surface other:surfaces)if(java.util.Objects.equals(candidate,other))hits++;
+            if(hits>count){count=hits;best=candidate;}
+        }
+        return best;
     }
     private static int key(ArrayList<V3> points,LinkedHashMap<String,Integer> ids,V3 v){
         String id=Math.round(v.x()*1e6)+":"+Math.round(v.y()*1e6);

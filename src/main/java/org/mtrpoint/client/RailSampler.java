@@ -16,9 +16,15 @@ public final class RailSampler {
     private static void initialize()throws ReflectiveOperationException{if(initialized)return;if(net.minecraftforge.fml.ModList.get().isLoaded("mtr_optional_rail_addon")){Class<?> geometry=Class.forName("org.mtroptional.client.RailGeometry");frameField=geometry.getField("FRAME");renderMethod=geometry.getMethod("render",Rail.class,RailMath.RenderRail.class,double.class,float.class,float.class);nodeMethod=Class.forName("org.mtroptional.client.ClientNodes").getMethod("get",long.class);Class<?> frame=Class.forName("org.mtroptional.client.RailGeometry$Frame");bankMethod=frame.getMethod("bank",double.class,double.class,double.class);cantAMethod=frame.getMethod("cantA");cantBMethod=frame.getMethod("cantB");}initialized=true;}
     public static void clear(){SAMPLES.clear();}
     public static Track sample(Rail rail){
+        try{initialize();}catch(ReflectiveOperationException ex){return null;}
+        // Without the Optional Rail adapter the cache depends on the Rail instance alone, because
+        // both node handles stay null. Answer from the cache before writing positions and doing two
+        // reflective node lookups per rail: the full rebuild calls this for every nearby rail.
+        Sample fast=SAMPLES.get(rail.getHexId());
+        if(fast!=null&&fast.rail==rail&&nodeMethod==null)return fast.track;
         var ends=new ObjectArraySet<Position>();rail.writePositions(ends);if(ends.size()!=2)return null;Position[] p=ends.toArray(new Position[0]);
         Object na=null,nb=null;
-        try{initialize();if(nodeMethod!=null){na=nodeMethod.invoke(null,net.minecraft.core.BlockPos.asLong((int)p[0].getX(),(int)p[0].getY(),(int)p[0].getZ()));nb=nodeMethod.invoke(null,net.minecraft.core.BlockPos.asLong((int)p[1].getX(),(int)p[1].getY(),(int)p[1].getZ()));}}catch(ReflectiveOperationException ex){return null;}
+        try{if(nodeMethod!=null){na=nodeMethod.invoke(null,net.minecraft.core.BlockPos.asLong((int)p[0].getX(),(int)p[0].getY(),(int)p[0].getZ()));nb=nodeMethod.invoke(null,net.minecraft.core.BlockPos.asLong((int)p[1].getX(),(int)p[1].getY(),(int)p[1].getZ()));}}catch(ReflectiveOperationException ex){return null;}
         Sample cached=SAMPLES.get(rail.getHexId());
         if(cached!=null&&cached.rail==rail&&Objects.equals(cached.nodeA,na)&&Objects.equals(cached.nodeB,nb))return cached.track;
         sampleBuilds++;
@@ -62,16 +68,47 @@ public final class RailSampler {
     }
     public static Mesh bank(Mesh mesh,Junction j){return bank(mesh,j,j.tracks());}
     public static Mesh bank(Mesh mesh,Junction j,List<Track> roads){
-        List<Sample> samples=roads.stream().map(t->SAMPLES.get(t.id)).filter(Objects::nonNull).toList();
-        if(samples.stream().allMatch(v->v.banks.isEmpty()))return mesh;
+        Map<String,Sample> byRoad=new java.util.LinkedHashMap<>();
+        for(Track t:roads){Sample s=SAMPLES.get(t.id);if(s!=null)byRoad.put(t.id,s);}
+        if(byRoad.values().stream().allMatch(v->v.banks.isEmpty()))return mesh;
+        List<Sample> samples=List.copyOf(byRoad.values());
         Mesh transformed=new Mesh();Map<V3,V3> cache=new HashMap<>();
-        for(var q:mesh.quads)transformed.quad(new Mesh.Quad(cache.computeIfAbsent(q.a(),p->bankPoint(p,samples)),cache.computeIfAbsent(q.b(),p->bankPoint(p,samples)),cache.computeIfAbsent(q.c(),p->bankPoint(p,samples)),cache.computeIfAbsent(q.d(),p->bankPoint(p,samples)),q.surface(),q.part(),q.index(),q.uv(),q.rail()));
+        // Tagged vertices are banked in their own road's frame, which is a function of the vertex
+        // and that road alone. Caching it by (position, road id) keeps the per-branch correctness
+        // while paying one reflective call per distinct vertex instead of one per face corner.
+        Map<String,Map<V3,V3>> ownCaches=new HashMap<>();
+        for(var q:mesh.quads){
+            // A vertex of a tagged running rail is banked in ITS OWN road's frame. The nearest-sample
+            // rule cannot tell two branches apart where they run close together, and a rail moved into
+            // the other branch's frame follows that branch's curve and slips out of its own faces.
+            Sample own=q.rail()==null?null:byRoad.get(q.rail().road().id);
+            Map<V3,V3> ownCache=own==null?null:ownCaches.computeIfAbsent(q.rail().road().id,k->new HashMap<>());
+            V3 a=ownPoint(q.a(),own,ownCache,cache,samples);
+            V3 b=ownPoint(q.b(),own,ownCache,cache,samples);
+            V3 c=ownPoint(q.c(),own,ownCache,cache,samples);
+            V3 d=ownPoint(q.d(),own,ownCache,cache,samples);
+            transformed.quad(new Mesh.Quad(a,b,c,d,q.surface(),q.part(),q.index(),q.uv(),q.rail()));
+        }
         return transformed;
     }
+    /** Test/verification switch: false restores the pre-cache per-corner path, for the counter's
+     * negative control. */
+    static boolean ownRoadCache=true;
+    /** Entries into the per-sample banker. */
+    public static long bankCalls;
+    private static V3 ownPoint(V3 p,Sample own,Map<V3,V3> ownCache,Map<V3,V3> cache,List<Sample> samples){
+        if(own==null)return cache.computeIfAbsent(p,v->bankPoint(v,samples));
+        return ownRoadCache?ownCache.computeIfAbsent(p,v->bankPoint(v,own)):bankPoint(p,own);
+    }
     private static V3 bankPoint(V3 p,List<Sample> samples){
-        Sample s=null;double distance=0,best=Double.MAX_VALUE;
-        for(Sample candidate:samples){double d=candidate.track.nearest(p),error=p.distance(candidate.track.at(d));if(error<best){best=error;distance=d;s=candidate;}}
+        Sample s=null;double best=Double.MAX_VALUE;
+        for(Sample candidate:samples){double d=candidate.track.nearest(p),error=p.distance(candidate.track.at(d));if(error<best){best=error;s=candidate;}}
+        return bankPoint(p,s);
+    }
+    private static V3 bankPoint(V3 p,Sample s){
         if(s==null)return p;
+        bankCalls++;
+        double distance=s.track.nearest(p);
         for(Bank bank:s.banks)if(distance>=bank.start-1e-6&&distance<=bank.end+1e-6)try{var v=(org.mtr.core.tool.Vector)bankMethod.invoke(bank.frame,p.x(),p.y(),p.z());return new V3(v.x,v.y,v.z);}catch(ReflectiveOperationException ex){return p;}return p;
     }
     public static void retain(Set<String> ids){SAMPLES.keySet().retainAll(ids);}

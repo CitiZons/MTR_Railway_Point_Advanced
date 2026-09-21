@@ -530,6 +530,11 @@ public final class RuntimeProbe {
             var dirty=(Set<PointClient.View>)field(PointSelectionScreen.class,"dirty",selector);
             if(!dirty.contains(view))throw new AssertionError("The saved turnout is no longer pending server acknowledgement");
             if(dirty.contains(other))throw new AssertionError("Selecting the peer turnout queued it for the shared save");
+            click(mc,"mtrpoint.sleeper_isolate");
+            if(!((List<?>)field(PointSelectionScreen.class,"sleepers",selector)).isEmpty())throw new AssertionError("Sleeper isolation rejected hits without removing the handle set");
+            if(buttonCount(mc,net.minecraft.network.chat.Component.translatable("mtrpoint.sleeper_isolation_cancel").getString())!=1)throw new AssertionError("Sleeper isolation button did not change to cancel");
+            click(mc,"mtrpoint.sleeper_isolation_cancel");
+            if(((List<?>)field(PointSelectionScreen.class,"sleepers",selector)).isEmpty())throw new AssertionError("Cancelling sleeper isolation did not restore handle geometry");
             System.out.println("POINT_UNIFIED: PASS full assembly preview, in-place selection, per-selected-turnout save, shared controls and number toggle");
         }catch(ReflectiveOperationException ex){throw new AssertionError(ex);}
     }

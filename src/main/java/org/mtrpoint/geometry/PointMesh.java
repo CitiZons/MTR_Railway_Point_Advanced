@@ -6,6 +6,12 @@ import java.util.*;
 public final class PointMesh {
     private record Running(Track track,double sign,int branch) {}
     public static double extent(Junction j,PointSettings s){return Math.min(j.tracks().stream().mapToDouble(t->t.length).min().orElse(0),j.extent()*s.lengthScale());}
+    /** How far one native rail model reaches along its road from its own centre. A junction hides
+     * every native cell it covers, and the cells are chosen by their centre: the first cell that
+     * survives starts up to this far behind its centre, so a turnout whose own steel stops exactly
+     * at the covered region leaves a bare stretch of track between the two. Block-sized models on a
+     * diagonal reach about .71 m, so one metre covers every orientation. */
+    public static final double NATIVE_CELL_REACH=1;
     public record YBoundary(double aEnd,double bEnd,double aLast,double bLast,double thirdEnd,double thirdLast) {
         public YBoundary(double aEnd,double bEnd,double aLast,double bLast){this(aEnd,bEnd,aLast,bLast,(aEnd+bEnd)/2,(aLast+bLast)/2);}
         public static YBoundary nominal(Junction j,PointSettings s){double end=extent(j,s),last=Math.max(s.sleeperSpacing()/2,end-s.sleeperSpacing()/2);return new YBoundary(end,end,last,last);}
@@ -30,7 +36,10 @@ public final class PointMesh {
         // Determine which branch lies to the positive lateral side in the common frame.
         double side=TurnoutFrame.side(j,extent);
         for(Running r:runs) {
-            double c=r.branch==0?j.sa():j.sb(),start=j.kind()==Junction.Kind.Y?0:Math.max(0,c-extent),end=j.kind()==Junction.Kind.Y?(r.branch==0?boundary.aEnd():boundary.bEnd()):Math.min(r.track.length,c+extent);
+            double c=r.branch==0?j.sa():j.sb(),start=j.kind()==Junction.Kind.Y?0:Math.max(0,c-extent);
+            // A turnout reaches one native cell past the region whose native models it hides, so its
+            // covering steel meets the first surviving native cell instead of stopping short of it.
+            double end=j.kind()==Junction.Kind.Y?Math.min(r.track.length,(r.branch==0?boundary.aEnd():boundary.bEnd())+NATIVE_CELL_REACH):Math.min(r.track.length,c+extent);
             boolean inner=j.kind()==Junction.Kind.Y&&r.sign==(r.branch==0?side:-side);
             double localStart=r.branch==0?bladeStart:secondStart;
             var stations=new TreeSet<Double>();stations.add(start);stations.add(end);for(double d=start+.24;d<end;d+=.24)stations.add(d);
@@ -138,3 +147,6 @@ public final class PointMesh {
         else {double top=p.top()-p.railHeight()+s.verticalOffset();mesh.beam(center.sub(normal.mul(half)),center.add(normal.mul(half)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
     }
 }
+
+
+

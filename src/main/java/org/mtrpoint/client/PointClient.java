@@ -50,7 +50,7 @@ public final class PointClient {
     private static PointNetwork.Motion motion;private static long motionReceived;
     private static int ticks;private static Object level;private static long signature;private static boolean refreshProfiles,geometryDirty;
     public static String message="";
-    public static void clear(){views=List.of();SETTINGS.clear();motion=null;signature=0;Profiles.clear();RailSampler.clear();BY_RAIL.clear();groupJunctions=List.of();groupsById=Map.of();movements=Map.of();geometryDirty=false;PointRenderer.clear();}
+    public static void clear(){views=List.of();SETTINGS.clear();motion=null;signature=0;Profiles.clear();RailSampler.clear();BY_RAIL.clear();NORMALISED.clear();groupJunctions=List.of();groupsById=Map.of();movements=Map.of();geometryDirty=false;PointRenderer.clear();}
     public static long revision(String id){return SETTINGS.getOrDefault(id,new AppearanceData.Entry(PointSettings.DEFAULT,0)).revision();}
     public static PointSettings saved(String id){return SETTINGS.getOrDefault(id,new AppearanceData.Entry(PointSettings.DEFAULT,0)).value();}
     public static void receive(PointNetwork.State m){
@@ -61,13 +61,27 @@ public final class PointClient {
         if(mc.screen instanceof BlueprintScreen screen)screen.acknowledge(m.id(),m.message());
         if(mc.screen instanceof PointSelectionScreen screen)screen.acknowledge(m.id(),m.message());
     }
+    /** The joined level's whole plan in one message: every setting is stored first and the views are
+     * then scanned once, instead of once per entry as the old per-entry sync did. */
+    public static void receiveBatch(PointNetwork.Batch m){
+        var mc=Minecraft.getInstance();if(mc.level==null||!mc.level.dimension().location().toString().equals(m.dimension()))return;
+        level=mc.level;var ids=new HashSet<String>();
+        for(var entry:m.entries()){SETTINGS.put(entry.id(),new AppearanceData.Entry(AppearanceData.decode(entry.json()),entry.revision()));ids.add(entry.id());signature=0;}
+        for(View v:views)if(ids.contains(v.junction.id()))v.preview(saved(v.junction.id()));
+    }
     public static void motion(PointNetwork.Motion m){motion=m;motionReceived=System.currentTimeMillis();movements=index(m.entries());}
     public static void tick(){
         var mc=Minecraft.getInstance();if(mc.level!=level){level=mc.level;clear();}if(mc.level==null)return;
         if(++ticks%20==0)rebuild();
-        if(!net.minecraftforge.fml.ModList.get().isLoaded("mtr_brsignal_addon")&&!views.isEmpty())movements=index(nativeMovements());
+        // Blade targeting needs the movements of the trains around this point, not a fresh walk of
+        // every vehicle's whole path twenty times a second: the scan is by far the most expensive
+        // per-tick work in this class, and a 0.2 s stale target is invisible next to the throw time.
+        if(ticks%4==0&&!net.minecraftforge.fml.ModList.get().isLoaded("mtr_brsignal_addon")&&!views.isEmpty())movements=index(nativeMovements());
         for(View v:views){choose(v);double step=.05/v.settings.animationSeconds();v.position+=Math.max(-step,Math.min(step,v.target-v.position));}
-        if(geometryDirty&&!(mc.screen instanceof BlueprintScreen)&&!(mc.screen instanceof PointSelectionScreen)){PointRenderer.prepare(views);geometryDirty=false;}
+        // Leaving the editor only starts the compile; a component still owing its assembly is
+        // drained by the next ticks, so the frame that closes the screen is never the one that
+        // bakes the whole region.
+        if((geometryDirty||PointRenderer.pending())&&!(mc.screen instanceof BlueprintScreen)&&!(mc.screen instanceof PointSelectionScreen)){PointRenderer.prepare(views);geometryDirty=false;}
     }
     public static void invalidate(){signature=0;refreshProfiles=true;Profiles.clear();}
     public static void rebuild(){
@@ -104,14 +118,45 @@ public final class PointClient {
     private static Set<String> stylesFor(Junction j,PointSettings s){var styles=new HashSet<String>();if(!s.profileStyle().isBlank())styles.add(s.profileStyle());for(String id:styleIds(j))if(Profiles.get(id).track())styles.add(id);return styles;}
     public static V3 editCenter(View v){return v.junction.kind()!=Junction.Kind.DIAMOND?v.junction.a().at(Math.min(5,PointMesh.extent(v.junction,v.settings)/2)).lerp(v.junction.b().at(Math.min(5,PointMesh.extent(v.junction,v.settings)/2)),.5):v.junction.center();}
     public static View nearest(V3 p){return views.stream().filter(v->v.junction.center().distance(p)<64).min(Comparator.comparingDouble(v->editCenter(v).distance(p))).orElse(null);}
+    /**
+     * True while a point view owns this rail cell, i.e. the native model must be hidden.
+     *
+     * <p>Called once per rendered rail cell per frame, so the answer is gated on the rail owning a
+     * view at all before the style id is normalised: a rail that no view covers -- the large
+     * majority of every world -- only pays one map lookup instead of a string normalisation, and
+     * every distinct style is normalised once instead of once per cell.
+     */
     public static boolean suppress(Rail rail,String style,V3 p,double margin){
-        if(rail==null)return false;style=RailResource.getIdWithoutDirection(style);
-        for(View v:BY_RAIL.getOrDefault(rail.getHexId(),List.of()))if(v.settings.enabled()&&!v.styles.isEmpty()&&v.styles.contains(style)){
+        if(rail==null)return false;
+        List<View> candidates=BY_RAIL.get(rail.getHexId());
+        if(candidates==null||candidates.isEmpty())return false;
+        return suppress(candidates,rail.getHexId(),normalised(style),p,margin);
+    }
+    /** The pre-gate implementation, kept as the reference the gated path is proven against. */
+    static boolean suppressReference(Rail rail,String style,V3 p,double margin){
+        if(rail==null)return false;
+        return suppress(BY_RAIL.getOrDefault(rail.getHexId(),List.of()),rail.getHexId(),RailResource.getIdWithoutDirection(style),p,margin);
+    }
+    private static boolean suppress(List<View> candidates,String railId,String style,V3 p,double margin){
+        for(View v:candidates)if(v.settings.enabled()&&!v.styles.isEmpty()&&v.styles.contains(style)){
             Junction j=v.junction;
-            if(v.scissors!=null){if(v.scissors.owns(j,rail.getHexId(),p))return true;continue;}
-            if(j.contains(rail.getHexId(),p,margin,PointMesh.extent(j,v.settings)))return true;
+            if(v.scissors!=null){if(v.scissors.owns(j,railId,p))return true;continue;}
+            if(j.contains(railId,p,margin,PointMesh.extent(j,v.settings)))return true;
         }return false;
     }
+    private static final Map<String,String> NORMALISED=new HashMap<>();
+    private static String normalised(String style){return NORMALISED.computeIfAbsent(style,RailResource::getIdWithoutDirection);}
+    /** Test access: the same query by rail id, so a fixture does not need a real MTR Rail. Takes the
+     * same ownership gate the per-cell path takes, so the gate itself is observable. */
+    static boolean suppressForTest(String railId,String style,V3 p,double margin){
+        List<View> candidates=BY_RAIL.get(railId);
+        if(candidates==null||candidates.isEmpty())return false;
+        return suppress(candidates,railId,normalised(style),p,margin);
+    }
+    static boolean suppressReferenceForTest(String railId,String style,V3 p,double margin){return suppress(BY_RAIL.getOrDefault(railId,List.of()),railId,RailResource.getIdWithoutDirection(style),p,margin);}
+    static void installForTest(List<View> next){views=List.copyOf(next);refreshScissors();}
+    static Set<String> gatedRails(){return BY_RAIL.keySet();}
+    static int normalisedForTest(){return NORMALISED.size();}
     private static void choose(View v){
         if(v.junction.kind()==Junction.Kind.DIAMOND)return;List<PointNetwork.Movement> candidates;
         boolean br=net.minecraftforge.fml.ModList.get().isLoaded("mtr_brsignal_addon");

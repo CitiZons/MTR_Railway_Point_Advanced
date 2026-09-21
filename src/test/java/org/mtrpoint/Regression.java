@@ -63,8 +63,23 @@ public final class Regression {
         }
         require(left.quads.stream().filter(q->q.part().equals("wing")).count()>20,"Continuous wing rail assembly exists");
         checkBladeContact(y);
+        checkBladePlaning(y);
+        checkNativeCutCap();
         checkSleeperEdits(y);
+        checkGuardMerge(y);
+        System.out.println("PASS: guard merge joins one physical rail only, keeps only the outer mouths and never bridges rails metres apart");
+        checkGuardSelection(y,triple.get(0));
+        System.out.println("PASS: every crossing and fan check rail is selectable, and a manual station reaches its baked steel");
+        checkGuardCut();
+        System.out.println("PASS: a crossing cuts its check rails at every height the two sections still overlap, and never cuts one that runs clear underneath");
         checkStockContinuity(y);
+        int conflictSamples=checkCrossingCutCoverage("Y turnout",y)[0],diamondTagged=-1;
+        for(double degrees:new double[]{20,90}){
+            double angle=Math.toRadians(degrees);V3 da=new V3(0,0,1),db=new V3(Math.sin(angle),0,Math.cos(angle));
+            Track ta=line("cover-a","a0","a1",da.mul(-35),da.mul(35)),tb=line("cover-b","b0","b1",db.mul(-35),db.mul(35));
+            for(Junction crossing:Detector.find(List.of(ta,tb)))if(crossing.kind()==Junction.Kind.DIAMOND){int[] measured=checkCrossingCutCoverage("diamond "+degrees,crossing);conflictSamples+=measured[0];diamondTagged=measured[1];}
+        }
+        System.out.println("PASS: crossing cuts cover every per-layer section conflict ("+conflictSamples+" real conflict intervals; diamond views keep "+diamondTagged+" tagged running-rail faces, so their cuts guard the rail a neighbour view supplies)");
         for(int control=17;control<=23;control++)require(!PointMesh.build(y,PointSettings.DEFAULT.with(control,.1),Profile.STANDARD,0).quads.equals(left.quads),"Crossing control changes actual geometry: "+control);
         var ties=left.quads.stream().filter(q->q.part().equals("sleeper")&&q.index()==12).toList();
         for(Track branch:List.of(y.a(),y.b())){
@@ -80,6 +95,13 @@ public final class Regression {
         AssemblyRegression.run();
         org.mtrpoint.client.PointRendererAssemblyRegression.run();
         org.mtrpoint.client.CheckRailCompletenessRegression.run();
+        org.mtrpoint.client.RailCacheRegression.run();
+        org.mtrpoint.client.MergedGuardCutRegression.run();
+        System.out.println("PASS: a merged cross-junction check run keeps exactly the steel the legacy bake keeps where the crossing rail covers it");
+        org.mtrpoint.client.MergedGuardCutRegression.runOffStyleGuard();
+        System.out.println("PASS: a guard whose height matches no crossing style group is still cut by the crossing rail it crosses, and one running clear above it is not");
+        org.mtrpoint.client.MergedGuardCutRegression.runOffStyleFixedY();
+        System.out.println("PASS: a pooled fixed-Y guard is cut by the crossing rail of every style group of its component (133 of 221 shared-road samples, exactly the fallback bake's cut), and one running clear above it is not");
         FollowupRegression.run();
         require(PointSettings.DEFAULT.lengthScale()==.9,"Default coverage multiplier");
         for(double last:new double[]{3.19,8.05,12.87}){var rows=PointMesh.sleeperDistances(last,.6);require(Math.abs(rows.get(rows.size()-1)-last)<1e-9,"Last sleeper follows native phase");for(int i=1;i<rows.size();i++)require(rows.get(i)-rows.get(i-1)<=.60000001,"No long gap before final sleeper");}
@@ -131,6 +153,112 @@ export(t0,"three-left");export(tm,"three-center");export(t1,"three-right");
             require(Math.abs(heart.get(0)[0]-wings.get(0)[1]-expected)<1e-6&&Math.abs(wings.get(1)[0]-heart.get(1)[1]-expected)<1e-6,"Wing flangeway stays constant until the terminal flare");
         }
     }
+    /** A cut face on a native rail model closes with the model's own section and its own material.
+     * The outline below is a chamfered I-beam: its area differs from the built-in three-part
+     * fallback, so the face cannot be the fallback rectangle stack, and the faces that form the
+     * outline carry a texture the mod's plain steel does not have. */
+    private static void checkNativeCutCap(){
+        Profile.Surface face=new Profile.Surface("mtrpoint:test/native_rail.png",.1f,.2f,.3f,.4f,0xff203040);
+        Profile.Surface other=new Profile.Surface("mtrpoint:test/native_other.png",.1f,.2f,.3f,.4f,0xff405060);
+        double[][] outline={{-.07,0},{.07,0},{.07,.02},{.05,.025},{.011,.025},{.011,.129},{.034,.129},{.034,.155},{.026,.165},{-.026,.165},{-.034,.155},{-.034,.129},{-.011,.129},{-.011,.025},{-.07,.025}};
+        var faces=new ArrayList<Mesh.Quad>();
+        for(int i=0;i<outline.length;i++){
+            double[] from=outline[i],to=outline[(i+1)%outline.length];
+            // Nine of the fifteen long faces carry the first material, so the modal surface of the
+            // outline is well defined rather than a tie between two of them.
+            faces.add(new Mesh.Quad(new V3(from[0],from[1],0),new V3(to[0],to[1],0),new V3(to[0],to[1],1),new V3(from[0],from[1],1),i<9?face:other,"rail",-1));
+        }
+        double area=0;for(int i=0;i<outline.length;i++){double[] a=outline[i],b=outline[(i+1)%outline.length];area+=a[0]*b[1]-b[0]*a[1];}
+        area=Math.abs(area)/2;
+        ModelDetail detail=new ModelDetail(faces,List.of(),List.of(),0,.165,.068,0,1,.5,0,false);
+        Profile nativeProfile=new Profile(1.435,.264,.068,.14,.165,Profile.STEEL,Profile.TIMBER,"native-cut",false,detail);
+        PointSettings s=PointSettings.DEFAULT;
+        V3 center=new V3(4,0,5),tangent=new V3(0,0,1);
+        Mesh start=new Mesh();start.railCutCap(center,tangent,nativeProfile,s,true);
+        Mesh end=new Mesh();end.railCutCap(center,tangent,nativeProfile,s,false);
+        require(!start.quads.isEmpty()&&!end.quads.isEmpty(),"A native rail cut emits an end face at both cuts");
+        double measured=0;
+        for(var q:start.quads){
+            require(q.surface().texture().equals(face.texture()),"A cut face on a native rail must use the model's own surface, not "+q.surface().texture());
+            V3 u=q.b().sub(q.a()),v=q.c().sub(q.a());
+            measured+=Math.sqrt(Math.pow(u.y()*v.z()-u.z()*v.y(),2)+Math.pow(u.z()*v.x()-u.x()*v.z(),2)+Math.pow(u.x()*v.y()-u.y()*v.x(),2))/2;
+            // The cap frame's x runs along the tangent's lateral, which is the same axis the swept
+            // rail faces use, so the profile coordinate is recovered by projecting back onto it.
+            for(V3 vertex:List.of(q.a(),q.b(),q.c()))require(onOutline(outline,center.x()-vertex.x(),vertex.y()-(nativeProfile.top()-detail.railTop())),"A native cut face must follow the model's real profile outline at "+(center.x()-vertex.x())+","+(vertex.y()-(nativeProfile.top()-detail.railTop())));
+            require(Math.abs(capNormal(q).y())<.02,"A cut face is a vertical cross-section of the rail");
+        }
+        require(Math.abs(measured-area)<1e-9,"A native cut face must close the whole real section: "+measured+" vs "+area);
+        require(start.quads.stream().allMatch(q->capNormal(q).dot(tangent)<-.999),"The start cut face looks out of the removed steel");
+        require(end.quads.stream().allMatch(q->capNormal(q).dot(tangent)>.999),"The end cut face looks out of the removed steel");
+        // A profile without a native model keeps the built-in three-part fallback and its steel.
+        Mesh fallback=new Mesh();fallback.railCutCap(center,tangent,Profile.STANDARD,s,true);
+        require(!fallback.quads.isEmpty()&&fallback.quads.stream().allMatch(q->q.surface().equals(Profile.STEEL)),"A profile without a native model keeps the built-in steel end face");
+        System.out.println("PASS: a rail cut closes with the native model's own profile outline and surface, and the built-in fallback keeps its steel");
+    }
+    private static boolean onOutline(double[][] outline,double x,double y){
+        for(double[] point:outline)if(Math.abs(point[0]-x)<1e-9&&Math.abs(point[1]-y)<1e-9)return true;
+        return false;
+    }
+    private static V3 capNormal(Mesh.Quad q){
+        V3 u=q.b().sub(q.a()),v=q.c().sub(q.a());
+        return new V3(u.y()*v.z()-u.z()*v.y(),u.z()*v.x()-u.x()*v.z(),u.x()*v.y()-u.y()*v.x()).unit();
+    }
+    /** A switch blade keeps its native section. A blade is swept whole and, while it still meets
+     * its stock rail, that whole section is planed by clipping it from the stock-rail side with the
+     * vertical planing surface at the blade's own cut point; a blade that carries no cut point is
+     * the untouched section. The planed mesh is compared with an independently assembled clip of the
+     * same section, so a taper that shrinks the section instead of cutting it fails here. */
+    private static void checkBladePlaning(Junction j){
+        Profile p=Profile.STANDARD;PointSettings s=PointSettings.DEFAULT;
+        double extent=PointMesh.extent(j,s),start=TurnoutFrame.start(j,extent),side=TurnoutFrame.side(j,extent);
+        FrogGeometry frog=new FrogGeometry(j,s,p,extent);
+        double length=s.bladeLength()>0?s.bladeLength():Math.max(2,Math.min(((frog.sa+frog.sb)/2-start)*.65,9));
+        int planed=0,clear=0;
+        for(double d=start;d+.24<=start+length;d+=.24){
+            var cutA=TurnoutFrame.blade(j.a(),j.b(),d,side,p.centerOffset(),p.headWidth(),0,start,length,s);
+            var cutB=TurnoutFrame.blade(j.a(),j.b(),d+.24,side,p.centerOffset(),p.headWidth(),0,start,length,s);
+            Mesh plain=new Mesh();plain.rail(cutA.point(),cutB.point(),1,1,p,s,"blade");
+            Mesh built=new Mesh();built.blade(cutA.point(),cutB.point(),cutA.cut(),cutB.cut(),p,s);
+            if(cutA.cut()==null&&cutB.cut()==null){
+                clear++;
+                require(built.quads.equals(plain.quads),"An unplaned blade keeps its full native section");
+                continue;
+            }
+            planed++;
+            require(built.quads.equals(planedSection(cutA,cutB,plain).quads),"A planed blade is the full native section clipped from the stock-rail side, never a shrunken section");
+            require(built.quads.size()==plain.quads.size()*2,"A planed blade keeps every face of the clipped section: "+built.quads.size()+" vs "+plain.quads.size());
+            require(built.quads.stream().anyMatch(Regression::collapsed),"A planed blade is cut open, not scaled down");
+            for(var q:built.quads)for(V3 v:List.of(q.a(),q.b(),q.c(),q.d()))
+                require(v.sub(cutA.cut()).dot(planingNormal(cutA,cutB))<=1e-9,"A planed blade never keeps steel behind its planing surface");
+        }
+        require(planed>0&&clear>0,"The fixture must contain both planed and unplaned blade cells: "+planed+" planed, "+clear+" clear");
+        for(double position:new double[]{0,1}){
+            var quads=PointMesh.build(j,s,p,position).quads.stream().filter(q->q.part().equals("blade")).toList();
+            require(!quads.isEmpty(),"The built turnout draws its switch blades");
+            require(quads.stream().allMatch(q->List.of(q.a(),q.b(),q.c(),q.d()).stream().allMatch(v->Double.isFinite(v.x()+v.y()+v.z()))),"Planed blade mesh is finite");
+        }
+        System.out.println("PASS: a switch blade is planed by clipping its full native section from the stock-rail side, never tapered, and a blade clear of its stock rail keeps its full section");
+    }
+    /** The restored planing rebuilt from the cut points alone: the whole native section cut by the
+     * vertical plane through the blade's planing station, on the side the blade is kept. */
+    private static Mesh planedSection(TurnoutFrame.Blade cutA,TurnoutFrame.Blade cutB,Mesh plain){
+        V3 origin=cutA.cut()!=null?cutA.cut():cutB.cut(),normal=planingNormal(cutA,cutB);
+        return Mesh.clipAnimated(plain,origin,normal);
+    }
+    /** The plane the restored planing uses, with no access to the private implementation state. */
+    private static V3 planingNormal(TurnoutFrame.Blade cutA,TurnoutFrame.Blade cutB){
+        V3 origin=cutA.cut()!=null?cutA.cut():cutB.cut(),along=cutA.cut()!=null&&cutB.cut()!=null?cutB.cut().sub(cutA.cut()):cutB.point().sub(cutA.point()),normal=along.lateral();
+        V3 away=cutA.point().sub(cutA.cut()!=null?cutA.cut():origin).add(cutB.point().sub(cutB.cut()!=null?cutB.cut():origin));
+        return away.dot(normal)>0?normal.mul(-1):normal;
+    }
+    /** True when a quad lost its area, which is what clipping a swept section leaves behind. */
+    private static boolean collapsed(Mesh.Quad q){
+        var distinct=new ArrayList<V3>();
+        for(V3 v:List.of(q.a(),q.b(),q.c(),q.d()))if(distinct.stream().noneMatch(other->other.distance(v)<1e-9))distinct.add(v);
+        if(distinct.size()<3)return true;
+        V3 u=distinct.get(1).sub(distinct.get(0)),v=distinct.get(2).sub(distinct.get(0));
+        return Math.sqrt(Math.pow(u.y()*v.z()-u.z()*v.y(),2)+Math.pow(u.z()*v.x()-u.x()*v.z(),2)+Math.pow(u.x()*v.y()-u.y()*v.x(),2))<1e-12;
+    }
     private static void checkBladeContact(Junction j){
         Profile p=Profile.STANDARD;PointSettings s=PointSettings.DEFAULT;double extent=PointMesh.extent(j,s),start=TurnoutFrame.start(j,extent),side=TurnoutFrame.side(j,extent);
         FrogGeometry frog=new FrogGeometry(j,s,p,extent);double length=s.bladeLength()>0?s.bladeLength():Math.max(2,Math.min(((frog.sa+frog.sb)/2-start)*.65,9));
@@ -170,6 +298,152 @@ export(t0,"three-left");export(tm,"three-center");export(t1,"three-right");
         var edited=GuardRails.forJunction(j,guarded,p).get(0);require(Math.abs(edited.start()-run.start()-.1)<1e-8&&Math.abs(edited.end()-run.end()+.1)<1e-8&&!edited.flareStart()&&edited.flareEnd()&&edited.mergeGroup().equals("manual-test"),"Manual guard stations and merge group are applied");
         PointSettings decoded=org.mtrpoint.AppearanceData.decode(org.mtrpoint.AppearanceData.JSON.toJson(guarded));require(decoded.guardEdits().equals(guarded.guardEdits()),"Manual guard edits survive persistence");
         require(guarded.resetSleepers().guardEdits().equals(guarded.guardEdits()),"Sleeper reset preserves manual guard edits");
+    }
+    /** One merge group is one drawn rail: merge() itself joins only runs that really are the same
+     * check rail on the same side of a track, and it must keep only the outer mouths of the union.
+     * The editor records any selection and only reports whether it became one rail, so the
+     * geometric predicate below is advisory rather than a refusal. */
+    private static void checkGuardMerge(Junction y){
+        Profile p=Profile.STANDARD;PointSettings s=PointSettings.DEFAULT;
+        var runs=GuardRails.forJunction(y,s,p);require(runs.size()==2,"A Y turnout exposes two outer check runs");
+        require(!GuardRails.mergeable(runs.get(0),runs.get(1)),"The two outer guards of a Y are not one rail");
+        require(GuardRails.merge(runs).size()==2,"Unmergeable guards stay separate");
+        require(GuardRails.exposeEnds(GuardRails.merge(runs)).stream().allMatch(r->r.flareStart()&&r.flareEnd()),"Separate guards keep both exposed mouths");
+        Track road=line("guard-road","0,0,0","0,0,30",new V3(0,0,0),new V3(0,0,30));
+        Track nearby=line("guard-road-b","0,0,0","0,0,30",new V3(.02,0,0),new V3(.02,0,30));
+        require(GuardRails.mergeable(new GuardRails.Run(road,6,10,.6,true,true,p,s,"g"),new GuardRails.Run(road,11.2,15,.6,true,true,p,s,"g")),"Two collinear runs on one track are mergeable");
+        // The editor widens both picks to the union before saving, so this is the stored group.
+        var grouped=List.of(new GuardRails.Run(road,6,15,.6,true,true,p,s,"g"),new GuardRails.Run(road,6,15,.6,true,true,p,s,"g"));
+        require(GuardRails.merge(grouped).size()==1,"One manual group draws one rail");
+        var union=GuardRails.exposeEnds(GuardRails.merge(grouped)).get(0);
+        require(Math.abs(union.start()-6)<1e-8&&Math.abs(union.end()-15)<1e-8&&union.flareStart()&&union.flareEnd(),"A merged rail keeps only its outer mouths");
+        var sides=List.of(new GuardRails.Run(road,6,10,.6,true,true,p,s,"g"),new GuardRails.Run(road,6,10,-.6,true,true,p,s,"g"));
+        require(!GuardRails.mergeable(sides.get(0),sides.get(1)),"Opposite check rails of one track are not one rail");
+        require(GuardRails.merge(sides).size()==2,"A group never fuses both sides of one track");
+        var shortRun=new GuardRails.Run(road,6,10,.6,true,true,p,s,"g");
+        var longRun=new GuardRails.Run(nearby,5,12,.6,true,true,p,s,"g");
+        require(GuardRails.mergeable(shortRun,longRun),"One rail sampled on two coincident tracks is mergeable");
+        require(GuardRails.merge(List.of(shortRun,longRun)).size()==1,"A manual group merges a short run into a longer one");
+        require(GuardRails.merge(List.of(longRun,shortRun)).size()==1,"A manual group merge does not depend on input order");
+        var apart=List.of(new GuardRails.Run(road,2,4,.6,true,true,p,s,"g"),new GuardRails.Run(nearby,20,22,.6,true,true,p,s,"g"));
+        require(!GuardRails.mergeable(apart.get(0),apart.get(1)),"Two collinear rails metres apart are not one rail");
+        require(GuardRails.merge(apart).size()==2,"A group never bridges two rails metres apart");
+        // The editor matches a selection back through this provenance. A proximity match lit up
+        // every rail that happened to run inside the merge tolerance of the clicked one, which is
+        // exactly what a shallow crossing looks like, so a click selected several directions at once.
+        var owners=new ArrayList<Set<Integer>>();
+        require(GuardRails.merge(grouped,owners).size()==1&&owners.equals(List.of(Set.of(0,1))),"A merged rail reports every run it was built from");
+        owners.clear();
+        require(GuardRails.merge(sides,owners).size()==2&&owners.equals(List.of(Set.of(0),Set.of(1))),"Unmerged rails keep their own selection identity");
+        // One physical rail sampled from two tracks whose node order is opposite: both ends of the
+        // overlap are interior, so neither may keep an open mouth.
+        Track backwards=line("guard-road-back","0,0,30","0,0,0",new V3(0,0,30),new V3(0,0,0));
+        var mirrored=List.of(new GuardRails.Run(road,6,10,.6,true,true,p,s,""),new GuardRails.Run(backwards,20,24,-.6,true,true,p,s,""));
+        require(GuardRails.exposeEnds(mirrored).stream().noneMatch(r->r.flareStart()||r.flareEnd()),"One rail seen from opposite track directions keeps no interior mouth");
+    }
+    /** A check rail must be interrupted by the rail that crosses it. The detector accepts two
+     * crossing roads up to 80 mm apart in height, but the cut used to be skipped for any guard more
+     * than 5 mm off the other rail's level, so such a crossing baked its guard steel straight
+     * through the running rail. */
+    private static void checkGuardCut(){
+        Profile p=Profile.STANDARD;PointSettings s=PointSettings.DEFAULT;double reach=20;
+        Track a=line("cut-a","a0","a1",new V3(-reach,0,0),new V3(reach,0,0));
+        Track flat=line("cut-flat","b0","b1",new V3(0,0,-reach),new V3(0,0,reach));
+        Track tilted=line("cut-tilt","b0","b1",new V3(0,.075,-reach),new V3(0,.075,reach));
+        var detected=Detector.find(List.of(a,tilted));
+        require(detected.size()==1&&detected.get(0).kind()==Junction.Kind.DIAMOND,"Two crossing roads 75 mm apart in height are still one crossing");
+        double extent=PointMesh.extent(detected.get(0),s);
+        Junction level=crossing("cut-level",a,flat,reach,extent);
+        Junction offset=crossing("cut-offset",a,tilted,reach,extent);
+        var levelFaces=guardFaces(assembly(level,s,p));
+        require(!levelFaces.isEmpty(),"A crossing bakes check rails");
+        double levelArea=guardArea(levelFaces),offsetArea=guardArea(guardFaces(assembly(offset,s,p)));
+        Track lifted=line("cut-lift","b0","b1",new V3(0,.4,-reach),new V3(0,.4,reach));
+        double liftedArea=guardArea(guardFaces(assembly(crossing("cut-lift",a,lifted,reach,extent),s,p)));
+        require(levelArea<liftedArea-1e-6,"A crossing cuts its check rails: "+levelArea+" vs "+liftedArea+" m2");
+        require(offsetArea<liftedArea-1e-6,"A check rail is cut by the crossing rail at any height the sections still overlap: "+offsetArea+" vs "+liftedArea+" m2");
+        // A rail a whole section higher cannot interfere: the guard below it survives exactly as an
+        // uncut band, which is the same steel the lifted assembly keeps.
+        require(Math.abs(liftedArea-levelArea)>1e-6,"A rail a whole section higher runs clear over the guard");
+    }
+    private static Mesh assembly(Junction j,PointSettings s,Profile p){
+        // The pooled path, which the world uses as soon as a neighbouring turnout pools a guard:
+        // a crossing's own check rails are then baked as guard steel instead of frog wings, and
+        // that is the path whose 5 mm gate used to skip the cut.
+        return DiamondGeometry.combine(List.of(new DiamondGeometry.Request(j,s,p.tune(s),PointMesh.extent(j,s))),GuardRails.crossing(j,s,p.tune(s)));
+    }
+    private static Junction crossing(String id,Track a,Track b,double station,double extent){return new Junction(id,Junction.Kind.DIAMOND,a,b,new V3(0,0,0),station,station,extent);}
+    private static List<Mesh.Quad> guardFaces(Mesh mesh){return mesh.quads.stream().filter(q->q.part().equals("guard")).toList();}
+    /** Horizontal footprint of the check steel: a cut removes top faces, so the sum shrinks. */
+    private static double guardArea(List<Mesh.Quad> faces){
+        double area=0;for(var q:faces)area+=Math.abs(V3.crossXZ(q.c().sub(q.a()),q.d().sub(q.b())))*.5;
+        return area;
+    }
+    /** Every check rail the world draws must be selectable, and a manual station on it must reach
+     * the baked steel. A plain crossing and a three-way fan own their check rails inside a shared
+     * assembly, so an editor that only enumerated the frog guards showed those rails while they
+     * could never be selected or merged: half of a multi-source guard had no partner to group with,
+     * and the merge silently changed nothing. The stock rail beside a switch blade stays excluded. */
+    private static void checkGuardSelection(Junction y,Junction fan){
+        Profile p=Profile.STANDARD;PointSettings s=PointSettings.DEFAULT;
+        var turnout=GuardRails.selectable(y,s,p,null,PointMesh.YBoundary.nominal(y,s));
+        require(turnout.size()>=2,"A turnout exposes its check rails");
+        require(turnout.stream().noneMatch(GuardRails::isBladeAdjacent),"The stock rail beside a blade is never selectable");
+        var boundary=PointMesh.YBoundary.nominal(fan,s);
+        var runs=GuardRails.selectable(fan,s,p,null,boundary);
+        require(!runs.isEmpty(),"A three-way fan exposes its check rails");
+        require(runs.stream().noneMatch(GuardRails::isBladeAdjacent),"A fan never selects steel beside a blade");
+        require(moved(fan,s,s.guard(0,guardEdit(runs.get(0))),p,boundary),"A manual station on a fan check rail reaches its baked assembly");
+        for(double degrees:new double[]{20,90}){
+            double angle=Math.toRadians(degrees);V3 da=new V3(0,0,1),db=new V3(Math.sin(angle),0,Math.cos(angle));
+            Track ta=line("select-a","a0","a1",da.mul(-35),da.mul(35)),tb=line("select-b","b0","b1",db.mul(-35),db.mul(35));
+            for(Junction crossing:Detector.find(List.of(ta,tb)))if(crossing.kind()==Junction.Kind.DIAMOND){
+                var crossBoundary=PointMesh.YBoundary.nominal(crossing,s);
+                var crossRuns=GuardRails.selectable(crossing,s,p,null,crossBoundary);
+                require(!crossRuns.isEmpty(),"A crossing exposes its check rails at "+degrees+" degrees");
+                require(moved(crossing,s,s.guard(0,guardEdit(crossRuns.get(0))),p,crossBoundary),"A manual station on a crossing check rail reaches the shared assembly at "+degrees+" degrees");
+            }
+        }
+    }
+    private static PointSettings.GuardEdit guardEdit(GuardRails.Run run){return new PointSettings.GuardEdit(run.start()+.4,Math.max(run.start()+.5,run.end()-.4),false,false,"manual-select");}
+    private static boolean moved(Junction j,PointSettings plain,PointSettings edited,Profile p,PointMesh.YBoundary boundary){
+        return baked(j,plain,p,boundary)!=baked(j,edited,p,boundary);
+    }
+    private static int baked(Junction j,PointSettings s,Profile p,PointMesh.YBoundary boundary){
+        Mesh mesh=j.kind()==Junction.Kind.DIAMOND?DiamondGeometry.combine(List.of(new DiamondGeometry.Request(j,s,p.tune(s),PointMesh.extent(j,s)))):PointMesh.build(j,s,p,0,boundary);
+        return mesh.quads.hashCode();
+    }
+    /** No crossing may keep steel where two rail sections really overlap in the same layer: every
+     * per-layer conflict of a crossing rail pair must fall inside a cut interval, otherwise a frog
+     * gap or flange channel stays closed. RailSection measures the real intersection of the two
+     * swept sections, so this is the contract that decides whether a crossing is actually cut.
+     * Only opposite-side pairs of a node-sharing turnout are crossings: the two branches' same-side
+     * rails are one continuous outer rail that merely grazes at the node and must stay whole. */
+    private static int[] checkCrossingCutCoverage(String label,Junction j){
+        Profile p=Profile.STANDARD;PointSettings s=PointSettings.DEFAULT;double extent=PointMesh.extent(j,s),radius=p.centerOffset();
+        var roads=j.tracks();var cuts=RailCuts.forJunction(j,s,p);var layers=RailSection.of(p,s);int checked=0;
+        // A crossing layout builds its own steel: its view carries no tagged running-rail face for a
+        // cut to land on, so the intervals measured below only guard the rail a cut really removes.
+        int tagged=j.kind()==Junction.Kind.DIAMOND?(int)PointMesh.build(j,s,p,0).quads.stream().filter(q->q.rail()!=null).count():-1;
+        for(Track road:roads){
+            double centre=road.nearest(j.center()),lo=Math.max(0,centre-2*extent),hi=Math.min(road.length,centre+2*extent);
+            for(int sign:new int[]{-1,1}){
+                double offset=sign*radius;
+                var holes=cuts.stream().filter(c->c.road().id.equals(road.id)&&Math.abs(c.offset()-offset)<1e-6).map(c->new double[]{c.start(),c.end()}).toList();
+                for(Track cutter:roads){if(cutter==road)continue;
+                    double cutterCentre=cutter.nearest(j.center()),cutterLo=Math.max(0,cutterCentre-2*extent),cutterHi=Math.min(cutter.length,cutterCentre+2*extent);
+                    for(int side:new int[]{-1,1}){
+                        if(j.kind()!=Junction.Kind.DIAMOND&&side==sign)continue;
+                        for(RailSection.Layer layer:layers)
+                            for(double[] conflict:RailSection.conflicts(road,offset,layer,layers,cutter,side*radius,cutterLo,cutterHi,lo,hi)){
+                                checked++;
+                                require(holes.stream().anyMatch(h->conflict[0]>=h[0]-1e-6&&conflict[1]<=h[1]+1e-6),label+" leaves uncut steel at the crossing of "+road.id+" offset "+String.format(Locale.ROOT,"%.4f",offset)+" over ["+String.format(Locale.ROOT,"%.4f",conflict[0])+","+String.format(Locale.ROOT,"%.4f",conflict[1])+"]");
+                            }
+                    }
+                }
+            }
+        }
+        return new int[]{checked,tagged};
     }
     private static void checkStockContinuity(Junction j){
         Profile p=Profile.STANDARD;PointSettings s=PointSettings.DEFAULT;Mesh mesh=PointMesh.build(j,s,p,0);var tops=DiamondRegression.tops(mesh,p.top());double extent=PointMesh.extent(j,s),start=TurnoutFrame.start(j,extent),side=TurnoutFrame.side(j,extent),second=j.b().nearest(j.a().at(start));

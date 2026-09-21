@@ -7,24 +7,13 @@ public final class ThreeWayMesh {
     private record Crossing(int a,int b,FrogGeometry frog,double sign) {}
     public static Mesh build(Junction j,PointSettings s,Profile raw,double position,PointMesh.YBoundary boundary){
         Mesh m=new Mesh();if(!s.enabled())return m;Profile p=raw.tune(s);double extent=PointMesh.extent(j,s);
-        List<Track> roads=j.tracks();var crossings=new ArrayList<Crossing>();
-        for(int a=0;a<3;a++)for(int b=a+1;b<3;b++){
-            Track x=roads.get(a),y=roads.get(b);Junction pair=new Junction(j.id()+":"+a+b,Junction.Kind.Y,x,y,j.center(),0,0,j.extent());
-            double sign=TurnoutFrame.side(pair,extent);
-            crossings.add(new Crossing(a,b,new FrogGeometry(pair,s,p,extent),sign));
-        }
+        List<Track> roads=j.tracks();var crossings=crossings(j,s,p,extent);
         double first=crossings.stream().mapToDouble(c->Math.min(c.frog.sa,c.frog.sb)).min().orElse(extent*.5);
         double bladeStart=TurnoutFrame.start(j,extent);
         double blade=s.bladeLength()>0?s.bladeLength():Math.max(2,Math.min(9,(first-bladeStart)*.65));
         double[] ends={boundary.aEnd(),boundary.thirdEnd(),boundary.bEnd()};
-        double seam=Math.max(bladeStart+blade+.25,crossings.stream().mapToDouble(c->Math.min(c.frog.toe(0),c.frog.toe(1))).min().orElse(first));
-        V3 seamOrigin=roads.get(1).at(seam),seamNormal=roads.get(1).tangent(seam);
-        double[] starts=new double[3];
-        for(int i=0;i<3;i++){
-            Track road=roads.get(i);double d=road.nearest(seamOrigin);
-            for(int k=0;k<12;k++){double den=road.tangent(d).dot(seamNormal);if(Math.abs(den)<.1)break;d=Math.max(0,Math.min(ends[i],d-road.at(d).sub(seamOrigin).dot(seamNormal)/den));}
-            starts[i]=d;
-        }
+        V3[] seam=seam(j,crossings,bladeStart,blade,extent);V3 seamOrigin=seam[0],seamNormal=seam[1];
+        double[] starts=startsAt(roads,seamOrigin,seamNormal,ends);
         for(int branch=0;branch<3;branch++)for(int sign:new int[]{-1,1}){
             Track road=roads.get(branch);double end=ends[branch];var cuts=new ArrayList<double[]>();
             for(var c:crossings){int local=c.a==branch?0:c.b==branch?1:-1;if(local>=0&&sign==(local==0?c.sign:-c.sign))cuts.add(new double[]{c.frog.toe(local),c.frog.heel(local)});}
@@ -85,6 +74,63 @@ public final class ThreeWayMesh {
         return m;
     }
     private static V3 rail(Track road,double d,double sign,Profile p){return road.at(d).add(road.tangent(d).lateral().mul(sign*p.centerOffset()));}
+    private static List<Crossing> crossings(Junction j,PointSettings s,Profile p,double extent){
+        List<Track> roads=j.tracks();var crossings=new ArrayList<Crossing>();
+        for(int a=0;a<3;a++)for(int b=a+1;b<3;b++){
+            Track x=roads.get(a),y=roads.get(b);Junction pair=new Junction(j.id()+":"+a+b,Junction.Kind.Y,x,y,j.center(),0,0,j.extent());
+            double sign=TurnoutFrame.side(pair,extent);
+            crossings.add(new Crossing(a,b,new FrogGeometry(pair,s,p,extent),sign));
+        }
+        return crossings;
+    }
+    /** The clip plane one shared assembly starts from, plus the stations it cuts every road at. */
+    private static V3[] seam(Junction j,List<Crossing> crossings,double bladeStart,double blade,double extent){
+        double first=crossings.stream().mapToDouble(c->Math.min(c.frog.sa,c.frog.sb)).min().orElse(extent*.5);
+        double seam=Math.max(bladeStart+blade+.25,crossings.stream().mapToDouble(c->Math.min(c.frog.toe(0),c.frog.toe(1))).min().orElse(first));
+        return new V3[]{j.tracks().get(1).at(seam),j.tracks().get(1).tangent(seam)};
+    }
+    private static double[] startsAt(List<Track> roads,V3 seamOrigin,V3 seamNormal,double[] ends){
+        double[] starts=new double[3];
+        for(int i=0;i<3;i++){
+            Track road=roads.get(i);double d=road.nearest(seamOrigin);
+            for(int k=0;k<12;k++){double den=road.tangent(d).dot(seamNormal);if(Math.abs(den)<.1)break;d=Math.max(0,Math.min(ends[i],d-road.at(d).sub(seamOrigin).dot(seamNormal)/den));}
+            starts[i]=d;
+        }
+        return starts;
+    }
+    /** The check rails the shared three-way assembly bakes, in the index space the editor edits:
+     * DiamondGeometry.three() draws exactly this list, so a manual station or merge group reaches
+     * the steel the union later reconstructs. A three-way fan is excluded from the pooled crossing
+     * runs by design, so without this the editor can see no selectable check steel at all. */
+    public static List<GuardRails.Run> checkRuns(Junction j,PointSettings s,Profile raw,PointMesh.YBoundary boundary){
+        if(!s.enabled())return List.of();
+        Profile p=raw.tune(s);double extent=PointMesh.extent(j,s);
+        var crossings=crossings(j,s,p,extent);
+        double first=crossings.stream().mapToDouble(c->Math.min(c.frog.sa,c.frog.sb)).min().orElse(extent*.5);
+        double bladeStart=TurnoutFrame.start(j,extent);
+        double blade=s.bladeLength()>0?s.bladeLength():Math.max(2,Math.min(9,(first-bladeStart)*.65));
+        double[] ends={boundary.aEnd(),boundary.thirdEnd(),boundary.bEnd()};
+        V3[] seam=seam(j,crossings,bladeStart,blade,extent);
+        double[] starts=startsAt(j.tracks(),seam[0],seam[1],ends);
+        for(int i=0;i<3;i++)starts[i]=Math.max(0,starts[i]-1);
+        return checksFor(j,s,p,starts,ends);
+    }
+    /** Every check rail of the fan: the two obtuse-crossing checks and the two frog guards of each
+     * of the three road pairs, with the viewing frames the shared assembly is built in. */
+    static List<GuardRails.Run> checksFor(Junction j,PointSettings s,Profile p,double[] starts,double[] ends){
+        List<Track> roads=j.tracks();var checks=new ArrayList<GuardRails.Run>();
+        double gap=Math.max(.02,s.flangeway()+s.wingGapDelta());double extent=PointMesh.extent(j,s);
+        for(int a=0;a<3;a++)for(int b=a+1;b<3;b++){
+            Junction pair=new Junction(j.id(),Junction.Kind.Y,roads.get(a),roads.get(b),j.center(),0,0,j.extent());
+            FrogGeometry frog=new FrogGeometry(pair,s,p,extent);double side=TurnoutFrame.side(pair,extent);
+            for(int local=0;local<2;local++){
+                int road=local==0?a:b;Track t=roads.get(road);double sign=local==0?side:-side;
+                checks.add(new GuardRails.Run(t,Math.max(starts[road],frog.toe(local)),Math.min(ends[road],frog.heel(local)+.65),sign*(p.centerOffset()-p.headWidth()-gap),true,true,p,s));
+                checks.add(frog.guard(local));
+            }
+        }
+        return GuardRails.edited(checks,s);
+    }
     private static Mesh nose(Crossing crossing,List<Crossing> crossings,double position){
         Mesh mesh=crossing.frog.movableNose(position);V3 center=crossing.frog.center();
         for(var other:crossings)if(other!=crossing){V3 delta=other.frog.center().sub(center);delta=new V3(delta.x(),0,delta.z());if(delta.length()>1e-6)mesh=Mesh.clipAnimated(mesh,center.lerp(other.frog.center(),.5),delta.unit());}
