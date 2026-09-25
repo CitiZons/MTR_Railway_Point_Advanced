@@ -77,25 +77,41 @@ final class DiamondRegression {
             }
         }
         int channels=0;
+        var channelRoads=new java.util.LinkedHashMap<String,Integer>();
         for(Track road:group.tracks())for(int sign:new int[]{-1,1})for(double d=.1;d<road.length;d+=.07){
             V3 q=offset(road,d,sign*(p.centerOffset()-p.headWidth()/2-s.flangeway()/2));
             if(!group.central(q))continue;
             if(coverage(all,q)>0)throw new AssertionError("Scissors through-road flange blocked: "+road.id+" at "+q);
-            channels++;
+            channels++;channelRoads.merge(road.id,1,Integer::sum);
         }
+        if(channels==0)throw new AssertionError("Scissors through-road flange sweep sampled nothing");
+        for(Track road:group.tracks())if(channelRoads.getOrDefault(road.id,0)==0)throw new AssertionError("Scissors through-road flange sweep skipped "+road.id);
         System.out.println("PASS: "+channels+" flange samples on all four scissors roads");
         int guards=0;
+        var guardRoads=new java.util.LinkedHashMap<String,Integer>();
+        var seenRoads=new java.util.LinkedHashMap<String,Integer>();
         var checkRuns=new ArrayList<GuardRails.Run>();
         for(Junction y:group.turnouts())checkRuns.addAll(GuardRails.forJunction(y,s,p));
         for(var run:GuardRails.merge(checkRuns)){
             if(group.through().stream().noneMatch(t->t.id.equals(run.road().id)))continue;
             for(double d=run.start()+.02;d<run.end()-.02;d+=.027){
-                V3 q=run.point(d);if(!group.central(q))continue;
+                V3 q=run.point(d);
+                // Presence is counted over the whole run: an asymmetric crossing generates its own
+                // check rails, and they do not all fall inside the shared centre of the layout.
+                seenRoads.merge(run.road().id,1,Integer::sum);
+                if(!group.central(q))continue;
                 if(group.tracks().stream().anyMatch(t->channel(lateral(t,q),p,s)))continue;
                 if(coverage(all,q)==0)throw new AssertionError("Guard disconnected/reflared at shared seam: "+q+" road="+run.road().id+" distance="+d+" range="+run.start()+","+run.end()+" laterals="+group.tracks().stream().map(t->t.id+":"+lateral(t,q)).toList());
-                guards++;
+                guards++;guardRoads.merge(run.road().id,1,Integer::sum);
             }
         }
+        // An asymmetric crossing labels its roads differently, and its own through road keeps its
+        // check rails outside the shared centre. Presence is therefore required per road over the
+        // whole run, while the coverage oracle stays where pooled steel is guaranteed: the old
+        // sweep skipped any road it never matched, so it could verify nothing and still pass.
+        for(Track road:group.through())if(seenRoads.getOrDefault(road.id,0)==0)throw new AssertionError("Through-road check-rail sweep skipped "+road.id);
+        int seen=seenRoads.values().stream().mapToInt(Integer::intValue).sum();
+        System.out.println("PASS: "+guards+" original through-road check-rail samples inside the shared centre, "+seen+" over the whole run of "+group.through().size()+" through roads");
         System.out.println("PASS: "+guards+" original through-road check-rail samples including shared seams");
         System.out.println("PASS: all four scissors noses/check rails and both sides of every offset rail seam");
     }

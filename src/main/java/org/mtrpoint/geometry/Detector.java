@@ -52,8 +52,12 @@ public final class Detector {
                         if(sine<.025)continue;
                         double sa=t.distance[i-1]+uv[0]*(t.distance[i]-t.distance[i-1]),sb=other.t.distance[other.i-1]+uv[1]*(other.t.distance[other.i]-other.t.distance[other.i-1]);
                         double extent=Math.min(80,2/sine+1);
-                        // Shared endpoints are not crossings; an interior recrossing still is.
-                        if(Math.min(Math.min(sa,t.length-sa),Math.min(sb,other.t.length-sb))<.5)continue;
+                        // A shared endpoint is not a crossing, but a rail that is merely pieced there
+                        // still crosses: the joint is an interior point of the physical track, and the
+                        // wheel really runs over the other track's rail at that spot.
+                        double endA=Math.min(sa,t.length-sa),endB=Math.min(sb,other.t.length-sb);
+                        if(endA<.5&&!joined(t,sa,nodes))continue;
+                        if(endB<.5&&!joined(other.t,sb,nodes))continue;
                         Track first=t.id.compareTo(other.t.id)<0?t:other.t,second=first==t?other.t:t;
                         String id="x:"+first.id+":"+second.id+":"+Math.round(p.x()*4)+":"+Math.round(p.z()*4);
                         if(result.stream().noneMatch(j->j.kind()==Junction.Kind.DIAMOND&&j.a().id.equals(first.id)&&j.b().id.equals(second.id)&&j.center().distance(p)<1))
@@ -64,8 +68,22 @@ public final class Detector {
         }
         return List.copyOf(result);
     }
-    public static double[] intersection(V3 a,V3 b,V3 c,V3 d) {
-        V3 r=b.sub(a),s=d.sub(c);double den=V3.crossXZ(r,s);if(Math.abs(den)<1e-9)return null;
+    /** True when the track is really pieced at this station: another rail continues it straight on
+     *  the same node, so a crossing landing there is an interior crossing of the physical track. A
+     *  corner where two rails merely meet is a joint, not a crossing. */
+    private static boolean joined(Track t,double station,Map<String,List<Track>> nodes){
+        boolean atStart=station<.5;
+        String node=atStart?t.startNode:t.endNode;
+        // Both entries of a node are parameterised away from it, so a straight continuation has the
+        // opposite outgoing direction; a corner where two rails merely meet does not.
+        V3 outgoing=atStart?t.tangent(0):t.tangent(t.length).mul(-1);
+        for(Track other:nodes.getOrDefault(node,List.of())){
+            if(other.id.equals(t.id))continue;
+            if(other.tangent(0).dot(outgoing)<-.995)return true;
+        }
+        return false;
+    }
+    public static double[] intersection(V3 a,V3 b,V3 c,V3 d) {        V3 r=b.sub(a),s=d.sub(c);double den=V3.crossXZ(r,s);if(Math.abs(den)<1e-9)return null;
         double u=V3.crossXZ(c.sub(a),s)/den,v=V3.crossXZ(c.sub(a),r)/den;
         return u>=0&&u<=1&&v>=0&&v<=1?new double[]{u,v}:null;
     }

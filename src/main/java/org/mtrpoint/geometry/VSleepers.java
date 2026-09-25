@@ -33,12 +33,12 @@ public final class VSleepers {
             V3 left=i==0?null:joints.get(i-1),right=i+1==arms.size()?null:joints.get(i);
             double d=a.distance;V3 c=a.center,n=a.normal;
             double lo=-half,hi=half;
-            for(V3 limit:new V3[]{left,right})if(limit!=null){double at=limit.sub(c).dot(n);lo=Math.min(lo,at-.5);hi=Math.max(hi,at+.5);}
+            if(!SleeperEdits.split(s,index))for(V3 limit:new V3[]{left,right})if(limit!=null){double at=limit.sub(c).dot(n);lo=Math.min(lo,at-.5);hi=Math.max(hi,at+.5);}
             Mesh arm=new Mesh();
             if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(arm,c,n,lo,hi,s,p,index);}
             else {double top=p.top()-p.railHeight()+s.verticalOffset();arm.beam(c.add(n.mul(lo)),c.add(n.mul(hi)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
             // Both arms use the same bisector, so their full widths meet without a step.
-            for(int side:new int[]{-1,1}){V3 limit=side<0?left:right;if(limit==null)continue;
+            for(int side:new int[]{-1,1}){V3 limit=side<0?left:right;if(limit==null||SleeperEdits.split(s,index)||SleeperEdits.full(s,index))continue;
                 V3 cut=n.add(arms.get(i+side).normal).unit();if(cut.dot(transverse)<0)cut=cut.mul(-1);
                 Mesh clipped=new Mesh();for(var q:arm.quads)Mesh.clip(clipped,q,limit,cut.mul(side));arm=clipped;
             }
@@ -83,11 +83,11 @@ public final class VSleepers {
         for(int branch=0;branch<2;branch++){
             V3 c=branch==0?a:b,n=branch==0?na:nb;Track road=branch==0?j.a():j.b();
             double half=p.centerOffset()+s.sleeperOverhang(),join=joint.sub(c).dot(n);
-            double lo=Math.min(-half,join-.4),hi=Math.max(half,join+.4);
+            double lo=SleeperEdits.split(s,index)?-half:Math.min(-half,join-.4),hi=SleeperEdits.split(s,index)?half:Math.max(half,join+.4);
             Mesh arm=new Mesh();
             if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(arm,c,n,lo,hi,s,p,index);}
             else {double top=Math.max(.03,p.top()-p.railHeight())+s.verticalOffset();arm.beam(c.add(n.mul(lo)),c.add(n.mul(hi)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
-            for(var q:arm.quads)Mesh.clip(out,q,joint,branch==0?cut:cut.mul(-1));
+            for(var q:arm.quads)if(SleeperEdits.split(s,index)||SleeperEdits.full(s,index))out.quad(q);else Mesh.clip(out,q,joint,branch==0?cut:cut.mul(-1));
             V3 forward=new V3(n.z(),0,-n.x());
             for(int sign:new int[]{-1,1}){
                 double near=branch==0?d:otherDistance;

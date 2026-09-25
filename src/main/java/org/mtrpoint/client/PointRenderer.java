@@ -52,22 +52,76 @@ public final class PointRenderer {
         GUARDS.update(combined,0);
     }
     private static Mesh assemble(List<GuardSource> next){
-        var runs=new ArrayList<GuardRails.Run>();
-        for(var source:next)for(var original:GuardRails.forJunction(source.view.junction,source.settings,source.profile)){
-            if(source.view.junction.kind()==Junction.Kind.THREE)continue;
-            GuardRails.Run run=original;
-            if(source.group!=null){
-                var group=source.group;boolean before=source.view.junction.center().sub(group.crossing().center()).dot(group.axis())<0;
-                run=run.clip(group.crossing().center().add(group.axis().mul(before?group.lo():group.hi())),group.axis().mul(before?1:-1));
+        var runs=new ArrayList<GuardRails.Run>();var steel=new ArrayList<DiamondGeometry.Steel>();
+        for(var source:next){
+            Profile tuned=source.profile.tune(source.settings);
+            // One cut source per view: its swept running steel plus the roads whose flange
+            // channels have to stay clear of any check steel that crosses them.
+            steel.add(new DiamondGeometry.Steel(source.view.mesh(),tuned.top()+source.settings.verticalOffset(),tuned,source.settings,
+                source.view.crossingRoads()));
+            for(var original:GuardRails.assembled(source.view.junction,source.settings,source.profile,source.group,
+                source.view.junction.kind()==Junction.Kind.THREE&&!source.settings.guardEdits().isEmpty()?RailSampler.yBoundary(source.view.junction,source.settings):null)){
+                GuardRails.Run run=original;
+                if(source.group!=null&&source.view.junction.kind()!=Junction.Kind.DIAMOND){
+                    var group=source.group;boolean before=source.view.junction.center().sub(group.crossing().center()).dot(group.axis())<0;
+                    run=run.clip(group.crossing().center().add(group.axis().mul(before?group.lo():group.hi())),group.axis().mul(before?1:-1));
+                }
+                if(run!=null)runs.add(run);
             }
-            if(run!=null)runs.add(run);
         }
-        Mesh merged=DiamondGeometry.guards(runs);
+        // The pool holds check steel from every source at once, so it is cut once against the whole
+        // component: a guard that runs into a neighbour's crossing, stock rail or blade is severed
+        // exactly where the two swept sections meet instead of passing through it.
+        Mesh merged=DiamondGeometry.guards(runs,steel);
         if(!runs.isEmpty())merged=RailSampler.bank(merged,next.get(0).view.junction,runs.stream().map(GuardRails.Run::road).distinct().toList());
         Mesh supports=new Mesh();
-        for(var source:next)for(var q:source.view.mesh().quads)if(q.part().equals("sleeper")||q.part().equals("fastener")||q.part().equals("wing"))supports.quad(q);
+        for(int i=0;i<next.size();i++){
+            var source=next.get(i);Profile tuned=source.profile.tune(source.settings);
+            var cutters=new ArrayList<DiamondGeometry.Steel>(steel);
+            Mesh check=new Mesh();
+            for(var q:source.view.mesh().quads){
+                if(q.part().equals("sleeper")||q.part().equals("fastener"))supports.quad(q);
+                else if(q.part().equals("wing"))check.quad(q);
+            }
+            // The wings are cut by every road of the component, including this view's own: a Y
+            // turnout emits its wings from the crossing geometry and never bakes them against its
+            // own flange ways, so the wing really does run into the other route's channel. Only the
+            // head spans of rail, blade and frog faces cut, so a wing never cuts its own copy.
+            supports.quads.addAll(DiamondGeometry.cutSteel(check,cutters,tuned,source.settings,tuned.top()+source.settings.verticalOffset()).quads);
+        }
         supports.quads.addAll(merged.quads);merged=SurfaceUnion.build(supports);
         return merged;
+    }
+    /** Test access to the exact final assembly the frame renderer submits. */
+    static Mesh assembleForTest(List<PointClient.View> active){
+        return assemble(active.stream().map(v->new GuardSource(v,v.settings,v.profile,v.scissors)).toList());
+    }
+    /** Test access to everything the world draws for these views: the shared component assembly plus
+     *  each view's own steel, filtered exactly like the per-view draw filters it. */
+    static Mesh worldForTest(List<PointClient.View> active){
+        Mesh world=assemble(active.stream().map(v->new GuardSource(v,v.settings,v.profile,v.scissors)).toList());
+        for(var view:active)for(var q:view.mesh().quads)if(!PointGpu.hiddenInView(q))world.quad(q);
+        return world;
+    }
+    /** Test access to the view record the assembly pools from. */
+    static PointClient.View view(Junction junction,PointSettings settings,Profile profile,ScissorsLayout group){
+        var v=new PointClient.View(junction,settings,profile,Set.of("default"));v.scissors=group;return v;
+    }
+    /** Test access to the view set a world build produces: a shared centre replaces the crossings it
+     *  already draws in full, and a neighbour that only reaches into a shared region keeps its own
+     *  steel but yields to the shared flangeways. */
+    static List<PointClient.View> viewsForTest(List<Junction> junctions,PointSettings settings,Profile profile){
+        var groups=ScissorsLayout.find(junctions);var members=new HashMap<String,ScissorsLayout>();
+        for(var group:groups){members.put(group.crossing().id(),group);for(var y:group.turnouts())members.put(y.id(),group);}
+        var out=new ArrayList<PointClient.View>();
+        for(var j:junctions){
+            if(ScissorsLayout.absorbedByCentre(groups,j))continue;
+            var v=view(j,settings,profile,members.get(j.id()));
+            if(v.scissors==null)v.shared=ScissorsLayout.reachedBy(groups,j);
+            out.add(v);
+        }
+        PointClient.refreshCrossings(out);
+        return out;
     }
     public static void preserve(org.mtr.mod.resource.RailResource resource,boolean flip,V3 a,V3 b){
         var attachments=Profiles.attachments(resource.getId());if(attachments.isEmpty())return;
