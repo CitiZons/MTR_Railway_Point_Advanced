@@ -11,11 +11,13 @@ public final class ThreeWayMesh {
         for(int a=0;a<3;a++)for(int b=a+1;b<3;b++){
             Track x=roads.get(a),y=roads.get(b);Junction pair=new Junction(j.id()+":"+a+b,Junction.Kind.Y,x,y,j.center(),0,0,j.extent());
             double sign=TurnoutFrame.side(pair,extent);
-            crossings.add(new Crossing(a,b,new FrogGeometry(pair,s,p,extent),sign));
+            crossings.add(new Crossing(a,b,new FrogGeometry(pair,s,p,extent,false),sign));
         }
         double first=crossings.stream().mapToDouble(c->Math.min(c.frog.sa,c.frog.sb)).min().orElse(extent*.5);
         double bladeStart=TurnoutFrame.start(j,extent);
         double blade=s.bladeLength()>0?s.bladeLength():Math.max(2,Math.min(9,(first-bladeStart)*.65));
+        // Only the tip contact length is planed, exactly as in PointMesh.
+        double contact=TurnoutFrame.contact(blade,p,s);
         double[] ends={boundary.aEnd(),boundary.thirdEnd(),boundary.bEnd()};
         double seam=Math.max(bladeStart+blade+.25,crossings.stream().mapToDouble(c->Math.min(c.frog.toe(0),c.frog.toe(1))).min().orElse(first));
         V3 seamOrigin=roads.get(1).at(seam),seamNormal=roads.get(1).tangent(seam);
@@ -38,8 +40,13 @@ public final class ThreeWayMesh {
                 if(branch>0&&b<=bladeStart)continue;
                 V3 x=rail(road,a,sign,p),y=rail(road,b,sign,p);double wa=1,wb=1;
                 if(moving&&b>bladeStart&&a<bladeStart+blade){
-                    wa=Math.max(.025,Math.min(1,(a-bladeStart)/blade));wb=Math.max(.025,Math.min(1,(b-bladeStart)/blade));
+                    wa=TurnoutFrame.taper(a-bladeStart,contact);wb=TurnoutFrame.taper(b-bladeStart,contact);
                     double open=Math.min(1,Math.abs(position-branch*.5)*2);
+                    // A rail is never drawn along the blade's own line - at any blade position, in any
+                    // amount, and not merely narrowed: the switch rail IS the rail there. The 2.5% taper
+                    // was a visible sliver hugging it, and at full section (blade away) it duplicated it.
+                    // The drop is unconditional, so every pose loses exactly the same faces and the
+                    // animated topology keeps its fixed face count.
                     x=TurnoutFrame.blade(road,a,sign,p.centerOffset(),open,bladeStart,blade,s);
                     y=TurnoutFrame.blade(road,b,sign,p.centerOffset(),open,bladeStart,blade,s);
                 }
@@ -79,9 +86,41 @@ public final class ThreeWayMesh {
             bearers(m,roads,centers,normals,distances,p,s,index++);
         }
         EndSleepers.finish(m,j,s,p,boundary);
+        SleeperEdits.finish(m,j,s,p);
         return m;
     }
     private static V3 rail(Track road,double d,double sign,Profile p){return road.at(d).add(road.tangent(d).lateral().mul(sign*p.centerOffset()));}
+    /** Stable editor indices for the twelve checks baked by DiamondGeometry.three(). */
+    public static List<GuardRails.Run> checkRuns(Junction j,PointSettings s,Profile raw,PointMesh.YBoundary boundary){
+        Profile p=raw.tune(s);double extent=PointMesh.extent(j,s);List<Track> roads=j.tracks();
+        var frogs=new ArrayList<FrogGeometry>();
+        for(int a=0;a<3;a++)for(int b=a+1;b<3;b++){
+            Junction pair=new Junction(j.id()+":"+a+b,Junction.Kind.Y,roads.get(a),roads.get(b),j.center(),0,0,j.extent());
+            frogs.add(new FrogGeometry(pair,s,p,extent));
+        }
+        double first=frogs.stream().mapToDouble(f->Math.min(f.sa,f.sb)).min().orElse(extent*.5);
+        double bladeStart=TurnoutFrame.start(j,extent);
+        double blade=s.bladeLength()>0?s.bladeLength():Math.max(2,Math.min(9,(first-bladeStart)*.65));
+        double seam=Math.max(bladeStart+blade+.25,frogs.stream().mapToDouble(f->Math.min(f.toe(0),f.toe(1))).min().orElse(first));
+        V3 origin=roads.get(1).at(seam),normal=roads.get(1).tangent(seam);
+        double[] ends={boundary.aEnd(),boundary.thirdEnd(),boundary.bEnd()},starts=new double[3];
+        for(int i=0;i<3;i++){
+            Track road=roads.get(i);double d=road.nearest(origin);
+            for(int k=0;k<12;k++){double den=road.tangent(d).dot(normal);if(Math.abs(den)<.1)break;d=Math.max(0,Math.min(ends[i],d-road.at(d).sub(origin).dot(normal)/den));}
+            starts[i]=Math.max(0,d-1);
+        }
+        var checks=new ArrayList<GuardRails.Run>();double gap=Math.max(.02,s.flangeway()+s.wingGapDelta());
+        for(int a=0;a<3;a++)for(int b=a+1;b<3;b++){
+            Junction pair=new Junction(j.id(),Junction.Kind.Y,roads.get(a),roads.get(b),j.center(),0,0,j.extent());
+            FrogGeometry frog=new FrogGeometry(pair,s,p,extent);double side=TurnoutFrame.side(pair,extent);
+            for(int local=0;local<2;local++){
+                int road=local==0?a:b;Track t=roads.get(road);double sign=local==0?side:-side;
+                checks.add(new GuardRails.Run(t,Math.max(starts[road],frog.toe(local)),Math.min(ends[road],frog.heel(local)+.65),sign*(p.centerOffset()-p.headWidth()-gap),true,true,p,s));
+                checks.add(frog.guard(local));
+            }
+        }
+        return GuardRails.applyEdits(checks,s);
+    }
     private static Mesh nose(Crossing crossing,List<Crossing> crossings,double position){
         Mesh mesh=crossing.frog.movableNose(position);V3 center=crossing.frog.center();
         for(var other:crossings)if(other!=crossing){V3 delta=other.frog.center().sub(center);delta=new V3(delta.x(),0,delta.z());if(delta.length()>1e-6)mesh=Mesh.clipAnimated(mesh,center.lerp(other.frog.center(),.5),delta.unit());}
@@ -106,10 +145,10 @@ public final class ThreeWayMesh {
         for(int branch=0;branch<3;branch++){
             V3 c=centers.get(branch),n=normals.get(branch);double half=p.centerOffset()+s.sleeperOverhang();Mesh arm=new Mesh();
             double lo=-half,hi=half;
-            for(int adjacent:new int[]{branch-1,branch+1})if(adjacent>=0&&adjacent<3&&joints[Math.min(branch,adjacent)]!=null){double join=joints[Math.min(branch,adjacent)].sub(c).dot(n);lo=Math.min(lo,join-.4);hi=Math.max(hi,join+.4);}
+            if(!SleeperEdits.split(s,index))for(int adjacent:new int[]{branch-1,branch+1})if(adjacent>=0&&adjacent<3&&joints[Math.min(branch,adjacent)]!=null){double join=joints[Math.min(branch,adjacent)].sub(c).dot(n);lo=Math.min(lo,join-.4);hi=Math.max(hi,join+.4);}
             if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(arm,c,n,lo,hi,s,p,index);}
             else {double top=p.top()-p.railHeight()+s.verticalOffset();arm.beam(c.add(n.mul(lo)),c.add(n.mul(hi)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
-            for(int adjacent:new int[]{branch-1,branch+1})if(adjacent>=0&&adjacent<3&&joints[Math.min(branch,adjacent)]!=null){
+            for(int adjacent:new int[]{branch-1,branch+1})if(!SleeperEdits.split(s,index)&&!SleeperEdits.full(s,index)&&adjacent>=0&&adjacent<3&&joints[Math.min(branch,adjacent)]!=null){
                 V3 other=centers.get(adjacent),on=normals.get(adjacent),joint=joints[Math.min(branch,adjacent)];
                 V3 cut=n.add(on).unit();if(cut.dot(other.sub(c))<0)cut=cut.mul(-1);Mesh clipped=new Mesh();for(var q:arm.quads)Mesh.clip(clipped,q,joint,cut);arm=clipped;
             }

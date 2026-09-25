@@ -441,10 +441,11 @@ public final class RuntimeProbe {
         var screen=(BlueprintScreen)mc.screen;
         click(mc,"mtrpoint.sleeper_mode_4");
         try{
-            var x=BlueprintScreen.class.getDeclaredField("menuX");var y=BlueprintScreen.class.getDeclaredField("menuY");x.setAccessible(true);y.setAccessible(true);
+            var scaleField=BlueprintScreen.class.getDeclaredField("uiScale");scaleField.setAccessible(true);
             var draft=BlueprintScreen.class.getDeclaredField("draft");draft.setAccessible(true);
             if(((PointSettings)draft.get(screen)).sleeperMode()!=4)throw new AssertionError("Opening sleeper list changed mode");
-            ((net.minecraft.client.gui.screens.Screen)screen).mouseClicked(x.getInt(screen)+10,y.getInt(screen)+mode*22+10,0);
+            double scale=scaleField.getDouble(screen);
+            ((net.minecraft.client.gui.screens.Screen)screen).mouseClicked((screen.panel().menuX+10)*scale,(screen.panel().menuY+mode*22+10)*scale,0);
             var flush=BlueprintScreen.class.getDeclaredMethod("flushPreview");flush.setAccessible(true);flush.invoke(screen);
             if(((PointSettings)draft.get(screen)).sleeperMode()!=mode)throw new AssertionError("Sleeper list selection failed");
         }catch(ReflectiveOperationException e){throw new AssertionError(e);}
@@ -471,7 +472,12 @@ public final class RuntimeProbe {
     private static void click(Minecraft mc,String key){
         String text=net.minecraft.network.chat.Component.translatable(key).getString();
         var button=mc.screen.children().stream().filter(w->w instanceof net.minecraft.client.gui.components.Button b&&b.getMessage().getString().equals(text)).map(w->(net.minecraft.client.gui.components.Button)w).findFirst().orElseThrow(()->new AssertionError("Missing button "+key));
-        mc.screen.mouseClicked(button.getX()+button.getWidth()/2D,button.getY()+10,0);if(mc.screen!=null)mc.screen.mouseReleased(button.getX()+5,button.getY()+5,0);
+        double scale=1;
+        if(mc.screen instanceof BlueprintScreen||mc.screen instanceof PointSelectionScreen)try{
+            var field=mc.screen.getClass().getDeclaredField("uiScale");field.setAccessible(true);scale=field.getDouble(mc.screen);
+        }catch(ReflectiveOperationException ex){throw new AssertionError(ex);}
+        mc.screen.mouseClicked((button.getX()+button.getWidth()/2D)*scale,(button.getY()+10)*scale,0);
+        if(mc.screen!=null)mc.screen.mouseReleased((button.getX()+5)*scale,(button.getY()+5)*scale,0);
         if(mc.screen instanceof BlueprintScreen)try{var flush=BlueprintScreen.class.getDeclaredMethod("flushPreview");flush.setAccessible(true);flush.invoke(mc.screen);}catch(ReflectiveOperationException ex){throw new AssertionError(ex);}
     }
     private static org.mtrpoint.PointNetwork.Motion longMotion(){

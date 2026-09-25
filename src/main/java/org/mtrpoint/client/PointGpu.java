@@ -23,13 +23,17 @@ final class PointGpu implements AutoCloseable {
     private Mesh source;private double frame;private long lightTick=-100;private V3 origin;private AABB bounds;
     private final Map<Long,Integer> bakedLight=new HashMap<>();
     static long uploads,draws,vertices;
+    /** Parts the per-view draw hides because the shared component assembly owns them instead. */
+    static boolean hiddenInView(Mesh.Quad q){
+        String part=q.part();return part.equals("guard")||part.equals("sleeper")||part.equals("fastener")||part.equals("wing");
+    }
     void update(Mesh mesh,double position,boolean movable,boolean removeGuards){
         var mc=Minecraft.getInstance();long tick=mc.level.getGameTime();boolean changed=source!=mesh;
         if(changed){
             source=mesh;bakedLight.clear();staticIds.clear();movingIds.clear();origin=mesh.quads.isEmpty()?new V3(0,0,0):mesh.quads.get(0).a();
             double x0=origin.x(),x1=x0,y0=origin.y(),y1=y0,z0=origin.z(),z1=z0;
             for(int i=0;i<mesh.quads.size();i++){
-                var q=mesh.quads.get(i);if(removeGuards&&(q.part().equals("guard")||q.part().equals("sleeper")||q.part().equals("fastener")||q.part().equals("wing")))continue;
+                var q=mesh.quads.get(i);if(removeGuards&&hiddenInView(q))continue;
                 boolean motion=q.part().equals("blade")||q.part().equals("stretcher")||movable&&q.part().equals("frog");
                 (motion?movingIds:staticIds).add(i);
                 for(V3 v:List.of(q.a(),q.b(),q.c(),q.d())){x0=Math.min(x0,v.x());x1=Math.max(x1,v.x());y0=Math.min(y0,v.y());y1=Math.max(y1,v.y());z0=Math.min(z0,v.z());z1=Math.max(z1,v.z());}

@@ -40,6 +40,61 @@ public final class RailSampler {
         double[] c=j.third()==null?new double[]{fallback.thirdEnd(),fallback.thirdLast()}:lastCell(j.third(),settings,fallback.thirdEnd(),fallback.thirdLast());
         return new PointMesh.YBoundary(a[0],b[0],a[1],b[1],c[0],c[1]);
     }
+    /** Snap a nominal station window outward onto the native repeat cells whose centre lies inside
+     *  it. The renderer hides a cell by its centre, so this is exactly the steel the mod must draw:
+     *  a hidden cell is never left open and a drawn cell is never covered twice. */
+    public static double[] window(List<double[]> cells,double from,double to){
+        double lo=Double.MAX_VALUE,hi=-Double.MAX_VALUE;
+        for(double[] cell:cells){
+            double centre=(cell[0]+cell[1])/2;
+            if(centre<from||centre>to)continue;
+            lo=Math.min(lo,Math.min(cell[0],cell[1]));hi=Math.max(hi,Math.max(cell[0],cell[1]));
+        }
+        return lo<=hi?new double[]{lo,hi}:new double[]{from,to};
+    }
+    /** Every rail that is sampled right now: the complete set of rails the renderer can hand over. */
+    public static List<Track> tracks(){
+        var out=new ArrayList<Track>();
+        for(Sample sample:SAMPLES.values())if(sample.track!=null)out.add(sample.track);
+        return List.copyOf(out);
+    }
+    /** The native repeat cells whose centre lies inside a station window, returned as the outward
+     *  window the modded mesh has to cover: a cell the renderer hides is then always drawn by the
+     *  mod, so the hand-over can never leave a hole. Without sampled cells (no rail around, or a
+     *  resource pack the sampler cannot read) one default MTR repeat cell of slack is kept. */
+    public static double[] lastCellRange(Track track,PointSettings settings,double from,double to){
+        Sample sample=SAMPLES.get(track.id);
+        if(sample==null)return new double[]{from-.5,to+.5};
+        double[] found={Double.MAX_VALUE,-Double.MAX_VALUE};
+        RailMath.RenderRail callback=(x1,z1,x2,z2,x3,z3,x4,z4,y1,y2)->{
+            V3 a=new V3(x1,y1,z1),b=new V3(x3,y2,z3);double center=track.nearest(a.lerp(b,.5));
+            if(center<from||center>to)return;
+            double lo=Math.min(track.nearest(a),track.nearest(b)),hi=Math.max(track.nearest(a),track.nearest(b));
+            found[0]=Math.min(found[0],lo);found[1]=Math.max(found[1],hi);
+        };
+        try{
+            for(double interval:intervals(sample.rail,settings)){if(renderMethod!=null)renderMethod.invoke(null,sample.rail,callback,interval,0F,0F);else sample.rail.railMath.render(callback,interval,0,0);}
+        }catch(ReflectiveOperationException ex){org.mtrpoint.PointMod.LOG.warn("Could not sample the crossing end cells",ex);return new double[]{from-.5,to+.5};}
+        return found[0]<=found[1]?found:new double[]{from-.5,to+.5};
+    }
+    /** The station window of a diamond crossing per road: the native cells the renderer hides, so
+     *  the mesh ends exactly where MTR takes the rail back on both sides of the crossing. */
+    public static PointMesh.DiamondBoundary diamondBoundary(Junction j,PointSettings settings){
+        double limit=PointMesh.extent(j,settings);
+        return new PointMesh.DiamondBoundary(lastCellRange(j.a(),settings,j.sa()-limit,j.sa()+limit),
+            lastCellRange(j.b(),settings,j.sb()-limit,j.sb()+limit));
+    }
+    private static Set<Double> intervals(Rail rail,PointSettings settings){
+        var intervals=new LinkedHashSet<Double>();
+        for(String raw:rail.getStyles()){
+            String id=org.mtr.mod.resource.RailResource.getIdWithoutDirection(raw);
+            if(id.equals("default")&&org.mtr.mapping.mapper.OptimizedRenderer.hasOptimizedRendering()&&org.mtr.mod.config.Config.getClient().getDefaultRail3D())id=rail.isSiding()?"default_3d_siding":"default_3d";
+            if(!Profiles.get(id).track()&&!id.equals(settings.profileStyle()))continue;
+            if(id.equals("default"))intervals.add(.5);
+            else org.mtr.mod.client.CustomResourceLoader.getRailById(id,r->intervals.add(r.getRepeatInterval()));
+        }
+        return intervals;
+    }
     private static double[] lastCell(Track track,PointSettings settings,double nominal,double fallbackLast){
         Sample sample=SAMPLES.get(track.id);if(sample==null)return new double[]{nominal,fallbackLast};
         Rail rail=sample.rail;var intervals=new LinkedHashSet<Double>();

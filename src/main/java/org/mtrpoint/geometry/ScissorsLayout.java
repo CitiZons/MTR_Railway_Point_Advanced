@@ -56,10 +56,47 @@ public record ScissorsLayout(Junction crossing,List<Junction> turnouts,List<Trac
         return List.copyOf(result);
     }
     public boolean central(V3 p){double d=p.sub(crossing.center()).dot(axis);return d>=lo&&d<=hi;}
+    /** True when any road of this junction reaches the shared region, whether or not the junction
+     *  takes part in the layout. A road that merely passes through still meets shared flangeways. */
+    public boolean overlaps(Junction j){
+        for(Track t:j.tracks()){
+            double min=Double.MAX_VALUE,max=-Double.MAX_VALUE;
+            for(V3 p:t.points){double d=p.sub(crossing.center()).dot(axis);min=Math.min(min,d);max=Math.max(max,d);}
+            if(max>=lo&&min<=hi)return true;
+        }
+        return false;
+    }
+    /** True when the shared centre already draws this junction in full. Its rails are part of the
+     *  central assembly, so a view of its own would only re-add the same steel without the shared
+     *  flangeway cuts - the under-cut reported at asymmetric crossings. */
+    public boolean drawnByCentre(Junction j){
+        if(j.id().equals(crossing.id()))return false;
+        for(Junction y:turnouts)if(y.id().equals(j.id()))return false;
+        if(!overlaps(j))return false;
+        for(Track t:j.tracks()){boolean known=false;for(Track g:tracks)if(g.id.equals(t.id)){known=true;break;}if(!known)return false;}
+        return true;
+    }
+    /** True when any layout in the list already draws this junction in full. */
+    public static boolean absorbedByCentre(List<ScissorsLayout> groups,Junction j){for(ScissorsLayout g:groups)if(g.drawnByCentre(j))return true;return false;}
+    /** The layout whose shared region this junction reaches into, or null when it is unrelated. */
+    public static ScissorsLayout reachedBy(List<ScissorsLayout> groups,Junction j){for(ScissorsLayout g:groups)if(g.overlaps(j))return g;return null;}
+    /** Remove the shared flangeways from steel a neighbouring node drew, so a rail that runs
+     *  through this region still clears every crossing channel that passes over it. */
+    public Mesh cutShared(Mesh source,PointSettings settings,Profile raw){
+        Profile p=raw.tune(settings);
+        return DiamondGeometry.cutChannels(source,tracks,p,settings,p.top()+settings.verticalOffset());
+    }
     public boolean owns(Junction j,String rail,V3 point){
         if(j.kind()==Junction.Kind.DIAMOND)return tracks.stream().anyMatch(t->t.id.equals(rail))&&central(point);
         Track road=j.a().id.equals(rail)?j.a():j.b().id.equals(rail)?j.b():null;
-        if(road==null)return false;double end=end(j,road);return road.nearest(point)<=end+1e-6;
+        if(road==null)return false;
+        // Exactly the side of the shared plane this member's own mesh is clipped to. The running
+        // rail sits half a gauge off the track centre, so comparing stations would hand over at a
+        // different place on the left and the right stock rail - the seam that moves from one side
+        // to the other when only one of them is corrected.
+        boolean before=j.center().sub(crossing.center()).dot(axis)<0;
+        V3 at=crossing.center().add(axis.mul(before?lo:hi)),normal=before?axis:axis.mul(-1);
+        return point.sub(at).dot(normal)<=1e-9&&point.distance(road.at(road.nearest(point)))<5;
     }
     public double end(Junction j,Track road){return intersection(road,j.center().sub(crossing.center()).dot(axis)<0?lo:hi);}
     public double intersection(Track road,double plane){
@@ -78,7 +115,12 @@ public record ScissorsLayout(Junction crossing,List<Junction> turnouts,List<Trac
         Mesh result=new Mesh();
         if(owner.kind()!=Junction.Kind.DIAMOND){
             boolean before=owner.center().sub(crossing.center()).dot(axis)<0;V3 at=crossing.center().add(axis.mul(before?lo:hi)),normal=before?axis:axis.mul(-1);
-            for(var q:source.quads)Mesh.clip(result,q,at,normal);
+            // Dynamic switch blades move across the shared boundary between animation frames. If
+            // they are polygon-clipped here, one frame may split a quad while the other keeps it,
+            // changing the cached animation topology and crashing the real client. The blade is
+            // already bounded by the turnout's own sweep window; keep its fixed topology and clip
+            // only the static road/frog/support faces at the scissors seam.
+            for(var q:source.quads)if(q.part().equals("blade"))result.quad(q);else Mesh.clip(result,q,at,normal);
         }else{
             Mesh first=new Mesh();for(var q:source.quads)Mesh.clip(first,q,crossing.center().add(axis.mul(hi)),axis);
             for(var q:first.quads)Mesh.clip(result,q,crossing.center().add(axis.mul(lo)),axis.mul(-1));
