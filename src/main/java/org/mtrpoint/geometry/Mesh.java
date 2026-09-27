@@ -3,6 +3,8 @@ package org.mtrpoint.geometry;
 import java.util.*;
 
 public final class Mesh {
+    /** Diagnostics used by the saved-layout smoke probe; reset by the probe before rebuilding. */
+    public static long CAP_CALLS, CAP_LOOPS, CAP_FACES, CAP_EDGE_CANDIDATES, CAP_EDGE_UNIQUE, CAP_OUTLINE_POINTS;
     public record Quad(V3 a,V3 b,V3 c,V3 d,Profile.Surface surface,String part,int index,java.util.List<Float> uv) {
         public Quad(V3 a,V3 b,V3 c,V3 d,Profile.Surface surface,String part,int index){this(a,b,c,d,surface,part,index,null);}
         public V3 center(){return a.add(b).add(c).add(d).mul(.25);}
@@ -20,8 +22,8 @@ public final class Mesh {
         V3 n=b.sub(a).lateral();
         V3 al=a.add(n.mul(-w1/2)).add(0,bottom,0),ar=a.add(n.mul(w1/2)).add(0,bottom,0),bl=b.add(n.mul(-w2/2)).add(0,bottom,0),br=b.add(n.mul(w2/2)).add(0,bottom,0);
         double h=top-bottom;V3 au=al.add(0,h,0),av=ar.add(0,h,0),bu=bl.add(0,h,0),bv=br.add(0,h,0);
-        // The two section faces of a beam carry a constant texture coordinate of their surface, the
-        // same way cap(...) does it: without uv an end face renders untextured and reads as a hole.
+        // Generic beam ends use the middle of the surface. Exposed rail ends are replaced with
+        // a mapped section by railCutCap rather than these overlapping rectangular beam ends.
         float su=(surface.u0()+surface.u1())/2,sv=(surface.v0()+surface.v1())/2;
         List<Float> euv=List.of(su,sv,su,sv,su,sv,su,sv);
         quad(av,bv,bu,au,surface,part,index);quad(bl,br,ar,al,surface,part,index);
@@ -35,20 +37,64 @@ public final class Mesh {
         beam(a,b,.022*taperA,.022*taperB,base+.025,top-.036,p.steel(),part,-1);
         beam(a,b,p.headWidth()*taperA,p.headWidth()*taperB,top-.036,top,p.steel(),part,-1);
     }
+    /** Adjacent curve segments share a cross-section frame, including native model vertices. */
+    public void rail(V3 a,V3 b,V3 normalA,V3 normalB,double taperA,double taperB,Profile p,PointSettings s,String part) {
+        Mesh section=new Mesh();section.rail(a,b,taperA,taperB,p,s,part);
+        // This sweep joins adjacent fixed sections and native rendering windows.
+        // The built-in beam's transverse faces are not physical rail ends.
+        if(p.detail()==null||p.detail().rails().isEmpty())
+            for(int i=section.quads.size()-1;i>=0;i--)if(i%6>=4)section.quads.remove(i);
+        V3 delta=b.sub(a),normal=delta.lateral();
+        double length2=delta.x()*delta.x()+delta.z()*delta.z();
+        if(length2<1e-16){quads.addAll(section.quads);return;}
+        java.util.function.Function<V3,V3> frame=v->{
+            V3 relative=v.sub(a);double t=(relative.x()*delta.x()+relative.z()*delta.z())/length2;
+            // Snap endpoints so both segments calculate exactly the same frame and centre.
+            if(Math.abs(t)<1e-9)t=0;else if(Math.abs(t-1)<1e-9)t=1;
+            V3 center=t==0?a:t==1?b:a.lerp(b,t);
+            return center.add(normalA.lerp(normalB,t).mul(relative.dot(normal))).add(0,v.y()-center.y(),0);
+        };
+        for(var q:section.quads)quad(new Quad(frame.apply(q.a()),frame.apply(q.b()),frame.apply(q.c()),frame.apply(q.d()),q.surface(),part,q.index(),q.uv()));
+    }
     /** Close an exposed end of a rail drawn from the native model. The cap is the model's own zMin
      *  cross-section, triangulated from its boundary, so an I-beam end face keeps its concave
-     *  notches empty instead of filling them, and it is drawn with the mod's steel material that
-     *  every renderer path resolves. Repeating rail models carry no end faces of their own, which
+     *  notches empty instead of filling them, with section coordinates mapped to the cut-steel
+     *  material. Repeating rail models carry no end faces of their own, which
      *  is why every visible cut end looked open before. */
     public void railCap(V3 center,V3 tangent,double taper,Profile p,PointSettings s,String part,boolean start){
+        CAP_CALLS++;
         ModelDetail detail=p.detail();if(detail==null||detail.rails().isEmpty())return;
-        var loops=endOutline(detail);if(loops.isEmpty())return;
+        var loops=endOutline(detail);
+        // MTR's OBJ rail contains the five longitudinal surfaces but deliberately omits
+        // the zMin cap. Those surfaces therefore have no topological loop to walk. Rebuild
+        // the same I-section from their measured foot/web/head extents in that case.
+        if(loops.isEmpty())loops=modelSection(detail);
+        CAP_LOOPS+=loops.size();if(loops.isEmpty())return;
         V3 normal=normalFor(tangent);double width=p.headWidth()/detail.headWidth();
         for(List<V3> loop:loops){
+            CAP_FACES+=triangulateCount(loop);
             var shape=new ArrayList<V3>(loop.size());
             for(V3 v:loop)shape.add(new V3((v.x()-detail.railCenter())*width*taper,v.y()-detail.railTop()+p.top()+s.verticalOffset(),0));
-            cap(center,normal,shape,p.steel(),part,start);
+            cap(center,normal,shape,Profile.END_STEEL,part,start);
         }
+    }
+    private static long triangulateCount(List<V3> loop){
+        return loop.size()<3?0:loop.size()-2;
+    }
+    private static List<List<V3>> modelSection(ModelDetail detail){
+        // Open OBJ sections still define their exact side silhouette. Do not
+        // invent a 36 mm head below a model whose head is only 1.28 mm deep:
+        // shearing that invented section makes pale plates along the rail side.
+        var levels=new TreeMap<Double,double[]>();
+        for(var q:detail.rails())for(V3 v:List.of(q.a(),q.b(),q.c(),q.d())){
+            var range=levels.computeIfAbsent(v.y(),k->new double[]{Double.POSITIVE_INFINITY,Double.NEGATIVE_INFINITY});
+            range[0]=Math.min(range[0],v.x());range[1]=Math.max(range[1],v.x());
+        }
+        if(levels.size()<2)return List.of();
+        var shape=new ArrayList<V3>();
+        for(var level:levels.entrySet())shape.add(new V3(level.getValue()[1],level.getKey(),0));
+        for(var level:levels.descendingMap().entrySet())shape.add(new V3(level.getValue()[0],level.getKey(),0));
+        return List.of(shape);
     }
     /** Close a cut in a rail: the native section when the profile carries a model, otherwise the
      *  built-in three-part I-beam section, whose web notch stays empty as well. */
@@ -67,7 +113,7 @@ public final class Mesh {
             new V3(web,footTop,0),new V3(web,headBottom,0),new V3(head,headBottom,0),
             new V3(head,top,0),new V3(-head,top,0),new V3(-head,headBottom,0),
             new V3(-web,headBottom,0),new V3(-web,footTop,0),new V3(-foot,footTop,0)
-        ),p.steel(),part,start);
+        ),Profile.END_STEEL,part,start);
     }
     /** Emit a planar end face from its boundary shape, given in the cap frame (x across the rail
      *  along the lateral, y vertical). The shape is wound counter-clockwise about that frame, which
@@ -75,10 +121,15 @@ public final class Mesh {
      *  reversed; material and part stay the caller's. */
     private void cap(V3 center,V3 normal,List<V3> raw,Profile.Surface surface,String part,boolean start){
         var shape=wound(raw);if(shape.size()<3)return;
-        float u=(surface.u0()+surface.u1())/2,v=(surface.v0()+surface.v1())/2;List<Float> uv=List.of(u,v,u,v,u,v,u,v);
+        double x0=shape.stream().mapToDouble(V3::x).min().orElse(0),x1=shape.stream().mapToDouble(V3::x).max().orElse(1);
+        double y0=shape.stream().mapToDouble(V3::y).min().orElse(0),y1=shape.stream().mapToDouble(V3::y).max().orElse(1);
         for(int[] triangle:triangulate(shape)){
-            V3 a=at(center,normal,shape.get(triangle[0])),b=at(center,normal,shape.get(triangle[1])),c=at(center,normal,shape.get(triangle[2]));
-            if(start)quad(new Quad(a,b,c,c,surface,part,-1,uv));else quad(new Quad(c,b,a,a,surface,part,-1,uv));
+            V3 a=shape.get(triangle[start?0:2]),b=shape.get(triangle[1]),c=shape.get(triangle[start?2:0]);
+            var uv=new ArrayList<Float>();for(V3 v:List.of(a,b,c,c)){
+                uv.add((float)(surface.u0()+(surface.u1()-surface.u0())*(v.x()-x0)/Math.max(1e-9,x1-x0)));
+                uv.add((float)(surface.v1()-(surface.v1()-surface.v0())*(v.y()-y0)/Math.max(1e-9,y1-y0)));
+            }
+            quad(new Quad(at(center,normal,a),at(center,normal,b),at(center,normal,c),at(center,normal,c),surface,part,-1,List.copyOf(uv)));
         }
     }
     private static V3 at(V3 center,V3 normal,V3 shape){return center.add(normal.mul(shape.x())).add(0,shape.y(),0);}
@@ -129,11 +180,12 @@ public final class Mesh {
             for(int i=0;i<4;i++){
                 V3 a=corners.get(i),b=corners.get((i+1)%4);
                 if(Math.abs(a.z()-edge)>epsilon||Math.abs(b.z()-edge)>epsilon)continue;
+                CAP_EDGE_CANDIDATES++;
                 int first=key(points,ids,a),second=key(points,ids,b);
                 if(first!=second)edges.add(join(first,second));
             }
         }
-        if(edges.isEmpty())return List.of();
+        CAP_EDGE_UNIQUE+=edges.size();CAP_OUTLINE_POINTS+=points.size();if(edges.isEmpty())return List.of();
         var incident=new LinkedHashMap<Integer,List<Integer>>();
         for(long id:edges){int a=(int)(id>>32),b=(int)id;incident.computeIfAbsent(a,k->new ArrayList<>()).add(b);incident.computeIfAbsent(b,k->new ArrayList<>()).add(a);}
         var used=new HashSet<Long>();var loops=new ArrayList<List<V3>>();
@@ -154,13 +206,24 @@ public final class Mesh {
                 used.add(join(current,next));from=current;current=next;
                 if(current==(int)(id>>32))break;
             }
-            if(loop.size()>=3)loops.add(loop);
+            // An open chain is not a closed cross-section. Closing it with an
+            // arbitrary diagonal creates cap triangles outside the native rail.
+            if(current==(int)(id>>32)&&loop.size()>=3)loops.add(loop);
         }
         return loops;
     }
     private static int key(ArrayList<V3> points,LinkedHashMap<String,Integer> ids,V3 v){
-        String id=Math.round(v.x()*1e6)+":"+Math.round(v.y()*1e6);
+        // MTR's native OBJ sections have independent face vertices.  The head/web
+        // contact is sometimes off by about 1 mm after model quantisation, so exact
+        // coordinate keys split one physical I-section into open chains.  Snap only
+        // the topology key; emitted cap vertices retain their original coordinates.
+        final double snap=.0025;
+        String id=Math.round(v.x()/snap)+":"+Math.round(v.y()/snap);
         Integer known=ids.get(id);if(known!=null)return known;
+        for(var entry:ids.entrySet()){
+            Integer candidate=entry.getValue();V3 p=points.get(candidate);
+            if(Math.hypot(p.x()-v.x(),p.y()-v.y())<=snap){ids.put(id,candidate);return candidate;}
+        }
         points.add(v);ids.put(id,points.size()-1);return points.size()-1;
     }
     private static long join(int a,int b){return ((long)Math.min(a,b)<<32)|Math.max(a,b);}
@@ -169,7 +232,9 @@ public final class Mesh {
         var points=List.of(q.a(),q.b(),q.c(),q.d());var source=new ArrayList<Vertex>();
         for(int i=0;i<4;i++)source.add(new Vertex(points.get(i),q.uv()==null?0:q.uv().get(i*2),q.uv()==null?0:q.uv().get(i*2+1)));
         var poly=new ArrayList<Vertex>();
-        for(int i=0;i<4;i++){Vertex a=source.get(i),b=source.get((i+1)%4);double da=a.p.sub(origin).dot(normal),db=b.p.sub(origin).dot(normal);if(da<=0)poly.add(a);if((da<0&&db>0)||(da>0&&db<0))poly.add(a.lerp(b,da/(da-db)));}
+        for(int i=0;i<4;i++){Vertex a=source.get(i),b=source.get((i+1)%4);double da=a.p.sub(origin).dot(normal),db=b.p.sub(origin).dot(normal);
+            double tolerance=1e-9*normal.length();if(Math.abs(da)<tolerance)da=0;if(Math.abs(db)<tolerance)db=0;
+            if(da<=0)poly.add(a);if((da<0&&db>0)||(da>0&&db<0))poly.add(a.lerp(b,da/(da-db)));}
         for(int i=poly.size()-1;i>=0&&poly.size()>1;i--)if(poly.get(i).p.distance(poly.get((i+1)%poly.size()).p)<1e-10)poly.remove(i);
         if(poly.size()<3)return;
         if(poly.size()==4)emit(out,q,poly.get(0),poly.get(1),poly.get(2),poly.get(3));

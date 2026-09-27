@@ -45,6 +45,14 @@ final class AssemblyRegression {
             if(first==null)first=contact;last=contact;
         }
         if(first.distance(last)<.02)throw new AssertionError("Stretcher does not follow the blade");
-        System.out.println("PASS: partial guard union "+samples+" samples; final support coverage/duplicates; diagonal V arms; graded moving stretcher");
+        Junction barJunction=new Junction("bar-regression",Junction.Kind.Y,a,b,new V3(0,0,0),0,0,12);
+        Mesh barMesh=PointMesh.build(barJunction,s,p,0);
+        double bearerTop=p.top()-p.railHeight()+s.verticalOffset(),barMin=Double.POSITIVE_INFINITY,barMax=Double.NEGATIVE_INFINITY;
+        for(var q:barMesh.quads)if(q.part().equals("stretcher"))for(V3 v:List.of(q.a(),q.b(),q.c(),q.d())){barMin=Math.min(barMin,v.y());barMax=Math.max(barMax,v.y());}
+        if(barMin<bearerTop+.009||barMax>bearerTop+.051)throw new AssertionError("Stretcher is above the bearer clearance band: "+barMin+".."+barMax);
+        Track clone=new Track("merge-clone","m0","m1",a.points);
+        var merged=GuardRails.merge(List.of(new GuardRails.Run(a,2,8,.6,true,true,p,s),new GuardRails.Run(clone,7,10,.6,false,true,p,s,"manual")));
+        if(merged.size()!=1||!merged.get(0).flareStart()||!merged.get(0).flareEnd())throw new AssertionError("Manual guard merge lost an outer mouth");
+        System.out.println("PASS: partial guard union "+samples+" samples; final support coverage/duplicates; diagonal V arms; graded moving stretcher; low stretcher and manual guard mouths");
     }
 }

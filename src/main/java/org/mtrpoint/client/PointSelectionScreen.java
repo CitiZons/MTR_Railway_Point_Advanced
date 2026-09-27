@@ -33,7 +33,7 @@ public final class PointSelectionScreen extends Screen implements TurnoutPanel.H
     private GuardDrag guardDrag;
     private PointClient.View sleeperView;private int sleeperIndex=-1;private long sentAt;private String status="";
     private boolean pending,numbersVisible=true,isolateSleepers,planDirty;private Button saveSleepers,undoSleepers,toggleNumbers,toggleSleeperIsolation,guardStartMinus,guardStartPlus,guardEndMinus,guardEndPlus,guardMerge,guardUnmerge,guardReset;
-    private final Deque<PointClient.View> saveQueue=new ArrayDeque<>();private PointClient.View savingView;
+    private final AppearanceSaveQueue saveQueue=new AppearanceSaveQueue();
     public PointSelectionScreen(){
         super(Component.translatable("mtrpoint.select_title"));var mc=net.minecraft.client.Minecraft.getInstance();
         center=new V3(mc.player.getX(),mc.player.getY(),mc.player.getZ());
@@ -81,6 +81,7 @@ public final class PointSelectionScreen extends Screen implements TurnoutPanel.H
     @Override public PointClient.View junction(){return selectedView();}
     @Override public PointSettings draft(String id){PointClient.View view=byId(id);return view==null?PointSettings.DEFAULT:drafts.getOrDefault(view,view.settings);}
     @Override public void changeDraft(String id,PointSettings next){
+        if(pending)return;
         PointClient.View view=byId(id);if(view==null)return;PointSettings before=drafts.get(view);if(next.equals(before))return;
         if(undo.size()>=100)undo.removeLast();undo.push(new PlanEdit(Map.of(view,before)));
         drafts.put(view,next);dirty.add(view);view.preview(next);planDirty=true;status="mtrpoint.preview_changed";updateButtons();
@@ -96,9 +97,15 @@ public final class PointSelectionScreen extends Screen implements TurnoutPanel.H
     @Override public void refreshWidgets(){rebuildWidgets();}
     @Override public Font fontRenderer(){return font;}
     @Override public void apply(){
-        if(pending||dirty.isEmpty())return;saveQueue.clear();saveQueue.addAll(points.stream().filter(dirty::contains).toList());sendNext();
+        if(pending||dirty.isEmpty())return;
+        saveQueue.begin(points.stream().filter(dirty::contains).map(v->new AppearanceSaveQueue.Request(v.junction.id(),PointClient.revision(v.junction.id()),drafts.get(v))).toList());sendNext();
     }
-    private void sendNext(){savingView=saveQueue.poll();if(savingView==null){pending=false;status="mtrpoint.saved";updateButtons();return;}PointSettings draft=drafts.get(savingView);V3 c=savingView.junction.center();pending=true;sentAt=System.currentTimeMillis();status="mtrpoint.saving";PointNetwork.send(new PointNetwork.Edit(savingView.junction.id(),BlockPos.containing(c.x(),c.y(),c.z()),PointClient.revision(savingView.junction.id()),AppearanceData.JSON.toJson(draft)));updateButtons();}
+    private void sendNext(){
+        var request=saveQueue.current();
+        if(request==null){pending=false;status="mtrpoint.saved";updateButtons();return;}
+        V3 c=byId(request.id()).junction.center();pending=true;sentAt=System.currentTimeMillis();status="mtrpoint.saving";
+        PointNetwork.send(new PointNetwork.Edit(request.id(),BlockPos.containing(c.x(),c.y(),c.z()),request.revision(),AppearanceData.JSON.toJson(request.value())));updateButtons();
+    }
     private void preparePlan(){
         Mesh next=new Mesh();var picks=new ArrayList<SleeperPick>();var guardPicks=new ArrayList<GuardPick>();var pool=new ArrayList<GuardRails.Run>();var poolOwners=new ArrayList<Set<Integer>>();
         for(int point=0;point<points.size();point++){var view=points.get(point);int base=(point+1)*1024;
@@ -171,9 +178,16 @@ public final class PointSelectionScreen extends Screen implements TurnoutPanel.H
         for(var entry:edit.before.entrySet()){PointClient.View view=entry.getKey();PointSettings before=entry.getValue();drafts.put(view,before);if(before.equals(PointClient.saved(view.junction.id())))dirty.remove(view);else dirty.add(view);view.preview(before);sleeperView=view;}
         status="mtrpoint.preview_changed";preparePlan();panel.sync();updateButtons();
     }
-    public void acknowledge(String id,String message){
+    public void acknowledge(String id,long revision,String message){
         PointClient.View view=byId(id);if(view==null)return;
-        status=message;PointSettings saved=PointClient.saved(id);drafts.put(view,saved);dirty.remove(view);view.preview(saved);preparePlan();panel.sync();if(savingView==view&&!saveQueue.isEmpty()){sendNext();return;}pending=false;savingView=null;updateButtons();
+        PointSettings saved=PointClient.saved(id);var reply=saveQueue.acknowledge(id,revision,saved,message);
+        if(reply==AppearanceSaveQueue.Reply.SAVED){drafts.put(view,saved);dirty.remove(view);}
+        else if(!dirty.contains(view))drafts.put(view,saved);
+        // Rejected saves and other players' broadcasts must not erase a local draft.
+        view.preview(drafts.get(view));preparePlan();panel.sync();
+        if(reply==AppearanceSaveQueue.Reply.SAVED){sendNext();return;}
+        if(reply!=AppearanceSaveQueue.Reply.IGNORED){pending=false;status=reply==AppearanceSaveQueue.Reply.CONFLICT?"mtrpoint.stale":message;}
+        updateButtons();
     }
     private void updateButtons(){
         boolean applyable=!dirty.isEmpty();
@@ -210,8 +224,16 @@ public final class PointSelectionScreen extends Screen implements TurnoutPanel.H
         // A scissors turnout contributes only its *visible* outside portion to the world
         // union. Testing its uncut source run here can reject a perfectly overlapping pair
         // because the hidden continuation diverges inside the centre crossing.
-        var trial=selected.stream().map(p->{var r=p.visible;return new GuardRails.Run(r.road(),r.start(),r.end(),r.offset(),r.flareStart(),r.flareEnd(),r.profile(),r.settings(),group);}).toList();
-        if(GuardRails.merge(trial).size()!=1){status="mtrpoint.guard_merge_rejected";return;}
+        var trial=selected.stream().map(p->{var r=p.visible;return new GuardRails.Run(r.road(),r.start(),r.end(),r.offset(),r.flareStart(),r.flareEnd(),r.profile(),r.settings(),group,r.part(),r.attachedStart(),r.attachedEnd());}).toList();
+        // A connected world union can retain several source curves. Requiring a single
+        // rebased interval rejected partial overlaps with different curved continuations.
+        if(!GuardRails.canMerge(trial)){
+            // The preview hides the central scissors seam, while the saved source intervals still
+            // describe the one physical rail. Retry against those source intervals before telling
+            // the player that two guards are unrelated; the world pool uses the same source data.
+            var sourceTrial=selected.stream().map(p->{var r=p.run;return new GuardRails.Run(r.road(),r.start(),r.end(),r.offset(),r.flareStart(),r.flareEnd(),r.profile(),r.settings(),group,r.part(),r.attachedStart(),r.attachedEnd());}).toList();
+            if(!GuardRails.canMerge(sourceTrial)){status="mtrpoint.guard_merge_rejected";return;}
+        }
         editGuards(p->new PointSettings.GuardEdit(p.run.start(),p.run.end(),p.run.flareStart(),p.run.flareEnd(),group));
         status="mtrpoint.guard_merged";
     }
@@ -232,8 +254,8 @@ public final class PointSelectionScreen extends Screen implements TurnoutPanel.H
     private GuardDrag endpointAt(GuardPick pick,double x,double y){
         // A scissors seam can hide an endpoint. Never offer a drag handle there.
         double first=Double.POSITIVE_INFINITY,last=Double.POSITIVE_INFINITY;
-        if(Math.abs(pick.visible.start()-pick.run.start())<1e-6){double[] a=project(pick.run.point(pick.run.start()));first=Math.hypot(x-a[0],y-a[1]);}
-        if(Math.abs(pick.visible.end()-pick.run.end())<1e-6){double[] b=project(pick.run.point(pick.run.end()));last=Math.hypot(x-b[0],y-b[1]);}
+        if(!pick.run.attachedStart()&&Math.abs(pick.visible.start()-pick.run.start())<1e-6){double[] a=project(pick.run.point(pick.run.start()));first=Math.hypot(x-a[0],y-a[1]);}
+        if(!pick.run.attachedEnd()&&Math.abs(pick.visible.end()-pick.run.end())<1e-6){double[] b=project(pick.run.point(pick.run.end()));last=Math.hypot(x-b[0],y-b[1]);}
         if(Math.min(first,last)>11)return null;
         return new GuardDrag(pick,first<=last,drafts.get(pick.view));
     }
@@ -254,6 +276,7 @@ public final class PointSelectionScreen extends Screen implements TurnoutPanel.H
         g.enableScissor(8,65,right-6,bottom);wire.draw(g,plan,0,this::project,selectedSleeper,right,bottom);
         highlight();if(highlight!=null)highlightWire.draw(g,highlight,0,this::project,-1,right,bottom);if(!guardHighlight.quads.isEmpty())highlightWire.draw(g,guardHighlight,0,this::project,-1,right,bottom);
         for(var pick:selectedGuardPicks())for(double station:new double[]{pick.run.start(),pick.run.end()}){
+            if(station==pick.run.start()&&pick.run.attachedStart()||station==pick.run.end()&&pick.run.attachedEnd())continue;
             if(station==pick.run.start()&&Math.abs(pick.visible.start()-station)>1e-6
                 ||station==pick.run.end()&&Math.abs(pick.visible.end()-station)>1e-6)continue;
             double[] handle=project(pick.run.point(station));int hx=(int)handle[0],hy=(int)handle[1];
@@ -318,6 +341,7 @@ public final class PointSelectionScreen extends Screen implements TurnoutPanel.H
     @Override public boolean mouseDragged(double x,double y,int button,double dx,double dy){
         x/=uiScale;y/=uiScale;dx/=uiScale;dy/=uiScale;
         if(button==1&&x<right){panX+=dx;panY+=dy;return true;}
+        if(pending&&button==0)return true;
         if(button==0&&guardDrag!=null&&x<right){
             var drag=guardDrag;var pick=drag.pick();var run=pick.run();
             V3 target=new V3(center.x()+(x-right/2D-panX)/zoom,0,center.z()+(y-(65+bottom)/2D-panY)/zoom);
@@ -354,6 +378,6 @@ public final class PointSelectionScreen extends Screen implements TurnoutPanel.H
     }
     /** Explicit escape hatch to the isolated blueprint; clicking a turnout never navigates. */
     private void openBlueprint(){PointClient.View view=selectedView();if(view!=null)minecraft.setScreen(new BlueprintScreen(view));}
-    @Override public void tick(){if(pending&&System.currentTimeMillis()-sentAt>5000){pending=false;status="mtrpoint.timeout";updateButtons();}}
+    @Override public void tick(){if(pending&&System.currentTimeMillis()-sentAt>5000){saveQueue.cancel();pending=false;status="mtrpoint.timeout";updateButtons();}}
     @Override public void removed(){panel.addingSleeper=false;for(var view:points)view.preview(PointClient.saved(view.junction.id()));super.removed();}
 }

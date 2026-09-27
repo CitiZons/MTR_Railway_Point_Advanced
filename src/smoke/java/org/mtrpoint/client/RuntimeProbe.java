@@ -15,6 +15,8 @@ public final class RuntimeProbe {
     private boolean opened,worldStarted,worldReady;private static volatile boolean longMotionReceived;private int ticks,worldTicks;
     private final boolean world=Boolean.getBoolean("pointProbeWorld");
     private java.util.List<org.mtr.core.data.Rail> rails;
+    private final Map<String,PointSettings> batchExpected=new LinkedHashMap<>();
+    private volatile boolean batchPersisted;
     public static void observeMotion(org.mtrpoint.PointNetwork.Motion received){if(received.timestamp()==403101L)longMotionReceived=true;}
     public RuntimeProbe(){MinecraftForge.EVENT_BUS.addListener(this::tick);}
     private void tick(TickEvent.ClientTickEvent e){
@@ -41,6 +43,7 @@ public final class RuntimeProbe {
     }
     private void worldTick(Minecraft mc){
         if(mc.level==null||mc.player==null)return;
+        if(!System.getProperty("pointProbeLayout","").isBlank()){SavedLayoutProbe.tick(mc);return;}
         if(!worldReady){
             worldReady=true;rails=new ArrayList<>();
             rails.add(rail(0,0,-7,30,90,112.5F));rails.add(rail(0,0,7,30,90,67.5F));rails.add(rail(0,-15,0,0,90,90));
@@ -142,7 +145,9 @@ public final class RuntimeProbe {
                 var list=PointSelectionScreen.class.getDeclaredField("points");list.setAccessible(true);
                 var points=(List<PointClient.View>)list.get(selector);if(points.size()<5)throw new AssertionError("Complex plan lost points");
                 var project=PointSelectionScreen.class.getDeclaredMethod("project",V3.class);project.setAccessible(true);
-                for(var point:points){double[] pixel=(double[])project.invoke(selector,PointClient.editCenter(point));if(pixel[0]<8||pixel[0]>selector.width-198||pixel[1]<65||pixel[1]>selector.height-45)throw new AssertionError("Initial plan hides marker");}
+                var right=PointSelectionScreen.class.getDeclaredField("right");right.setAccessible(true);
+                var bottom=PointSelectionScreen.class.getDeclaredField("bottom");bottom.setAccessible(true);
+                for(var point:points){double[] pixel=(double[])project.invoke(selector,PointClient.editCenter(point));if(pixel[0]<8||pixel[0]>right.getInt(selector)||pixel[1]<65||pixel[1]>bottom.getInt(selector))throw new AssertionError("Initial plan hides marker");}
                 String expected=points.get(selected.getInt(selector)).junction.id();selector.keyPressed(org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER,0,0);
                 if(!(mc.screen instanceof BlueprintScreen editor)||!editor.pointId().equals(expected))throw new AssertionError("Plan selected a different point");
                 click(mc,"mtrpoint.close");System.out.println("POINT_SELECTOR: PASS five scissors editors, Tab selection and Enter opens selected ID");
@@ -198,8 +203,9 @@ public final class RuntimeProbe {
             PointClient.invalidate();PointClient.rebuild();var v=PointClient.views.stream().filter(t->t.junction.kind()==Junction.Kind.Y).findFirst().orElseThrow();
             double start=TurnoutFrame.start(v.junction,PointMesh.extent(v.junction,v.settings));
             if(start<10)throw new AssertionError("Real MTR long-approach fixture has no remote divergence");
-            V3 c=v.junction.a().at(start+2);v.previewPosition=0;
-            mc.getSingleplayerServer().execute(()->mc.getSingleplayerServer().getPlayerList().getPlayers().get(0).connection.teleport(c.x(),c.y()+7,c.z(),0,90));
+            V3 c=v.junction.a().at(start+.7);v.previewPosition=0;
+            // Close oblique view exposes the millimetre stock-rail hand-over and bar height.
+            mc.getSingleplayerServer().execute(()->mc.getSingleplayerServer().getPlayerList().getPlayers().get(0).connection.teleport(c.x()+2,c.y()+1,c.z()-3,32,45));
             System.out.println("POINT_REMOTE: blade starts "+start+" m after node");
         }
         if(worldTicks==491)Screenshot.grab(mc.gameDirectory,"point-remote-bar-left.png",mc.getMainRenderTarget(),m->{});
@@ -231,7 +237,35 @@ public final class RuntimeProbe {
         if(worldTicks==551)Screenshot.grab(mc.gameDirectory,"point-asymmetric-three-moving-0.png",mc.getMainRenderTarget(),m->{});
         if(worldTicks==553)PointClient.views.stream().filter(v->v.junction.kind()==Junction.Kind.THREE).findFirst().orElseThrow().previewPosition=1;
         if(worldTicks==563)Screenshot.grab(mc.gameDirectory,"point-asymmetric-three-moving-1.png",mc.getMainRenderTarget(),m->{});
-        if(worldTicks==566){System.out.println("POINT_WORLD_FINAL: PASS");mc.stop();}
+        if(worldTicks==566){
+            mc.options.hideGui=false;var screen=new PointSelectionScreen();mc.setScreen(screen);
+            int index=0;
+            for(var view:PointClient.views){
+                if(view.junction.center().distance(new V3(mc.player.getX(),mc.player.getY(),mc.player.getZ()))>=64)continue;
+                PointSettings edit=PointClient.saved(view.junction.id()).with(13,1.2+index*.1);
+                batchExpected.put(view.junction.id(),edit);screen.changeDraft(view.junction.id(),edit);
+                if(++index==2)break;
+            }
+            if(batchExpected.size()!=2)throw new AssertionError("Batch save needs two editable junctions");
+            screen.apply();
+        }
+        if(worldTicks==616){
+            var screen=(PointSelectionScreen)mc.screen;
+            for(var entry:batchExpected.entrySet())if(!PointClient.saved(entry.getKey()).equals(entry.getValue())||!screen.draft(entry.getKey()).equals(entry.getValue()))
+                throw new AssertionError("Plan did not save both appearances: "+entry.getKey());
+            mc.getSingleplayerServer().execute(()->{
+                var stored=org.mtrpoint.AppearanceData.get(mc.getSingleplayerServer().overworld());
+                batchPersisted=batchExpected.entrySet().stream().allMatch(e->stored.entries.containsKey(e.getKey())&&stored.entries.get(e.getKey()).value().equals(e.getValue()));
+            });
+        }
+        if(worldTicks==626){
+            if(!batchPersisted)throw new AssertionError("Batch appearances not persisted on the server");
+            mc.setScreen(null);mc.setScreen(new PointSelectionScreen());
+            for(var entry:batchExpected.entrySet())if(!((PointSelectionScreen)mc.screen).draft(entry.getKey()).equals(entry.getValue()))
+                throw new AssertionError("Reopening plan lost saved appearance");
+            System.out.println("POINT_BATCH_SAVE: PASS two queued edits acknowledged, persisted and restored on reopen");
+            System.out.println("POINT_WORLD_FINAL: PASS");mc.stop();
+        }
 
     }
     private static void checkBoundary(){
@@ -441,10 +475,10 @@ public final class RuntimeProbe {
         var screen=(BlueprintScreen)mc.screen;
         click(mc,"mtrpoint.sleeper_mode_4");
         try{
-            var x=BlueprintScreen.class.getDeclaredField("menuX");var y=BlueprintScreen.class.getDeclaredField("menuY");x.setAccessible(true);y.setAccessible(true);
             var draft=BlueprintScreen.class.getDeclaredField("draft");draft.setAccessible(true);
             if(((PointSettings)draft.get(screen)).sleeperMode()!=4)throw new AssertionError("Opening sleeper list changed mode");
-            ((net.minecraft.client.gui.screens.Screen)screen).mouseClicked(x.getInt(screen)+10,y.getInt(screen)+mode*22+10,0);
+            double scale=screenScale(screen);
+            ((net.minecraft.client.gui.screens.Screen)screen).mouseClicked((screen.panel().menuX+10)*scale,(screen.panel().menuY+mode*22+10)*scale,0);
             var flush=BlueprintScreen.class.getDeclaredMethod("flushPreview");flush.setAccessible(true);flush.invoke(screen);
             if(((PointSettings)draft.get(screen)).sleeperMode()!=mode)throw new AssertionError("Sleeper list selection failed");
         }catch(ReflectiveOperationException e){throw new AssertionError(e);}
@@ -471,8 +505,13 @@ public final class RuntimeProbe {
     private static void click(Minecraft mc,String key){
         String text=net.minecraft.network.chat.Component.translatable(key).getString();
         var button=mc.screen.children().stream().filter(w->w instanceof net.minecraft.client.gui.components.Button b&&b.getMessage().getString().equals(text)).map(w->(net.minecraft.client.gui.components.Button)w).findFirst().orElseThrow(()->new AssertionError("Missing button "+key));
-        mc.screen.mouseClicked(button.getX()+button.getWidth()/2D,button.getY()+10,0);if(mc.screen!=null)mc.screen.mouseReleased(button.getX()+5,button.getY()+5,0);
+        double scale=screenScale(mc.screen);
+        mc.screen.mouseClicked((button.getX()+button.getWidth()/2D)*scale,(button.getY()+10)*scale,0);if(mc.screen!=null)mc.screen.mouseReleased((button.getX()+5)*scale,(button.getY()+5)*scale,0);
         if(mc.screen instanceof BlueprintScreen)try{var flush=BlueprintScreen.class.getDeclaredMethod("flushPreview");flush.setAccessible(true);flush.invoke(mc.screen);}catch(ReflectiveOperationException ex){throw new AssertionError(ex);}
+    }
+    private static double screenScale(net.minecraft.client.gui.screens.Screen screen){
+        try{var scale=screen.getClass().getDeclaredField("uiScale");scale.setAccessible(true);return scale.getDouble(screen);}
+        catch(ReflectiveOperationException ex){throw new AssertionError(ex);}
     }
     private static org.mtrpoint.PointNetwork.Motion longMotion(){
         String from=org.mtr.core.data.TwoPositionsBase.getHexId(new org.mtr.core.data.Position(-30000000,-64,30000000),new org.mtr.core.data.Position(-29999999,320,29999999));

@@ -66,18 +66,33 @@ public final class PointMesh {
         double contact=TurnoutFrame.contact(blade,p,s);
         // Determine which branch lies to the positive lateral side in the common frame.
         double side=TurnoutFrame.side(j,extent);
+        double stockStart=TurnoutFrame.stockStart(j.b(),j.a(),bladeStart);
+        double commonEnd=j.a().nearest(j.b().at(stockStart));
         for(Running r:runs) {
             double c=r.branch==0?j.sa():j.sb(),start=j.kind()==Junction.Kind.Y?(r.branch==0?boundary.aStart():r.branch==1?boundary.bStart():boundary.thirdStart()):Math.max(0,c-extent),end=j.kind()==Junction.Kind.Y?(r.branch==0?boundary.aEnd():r.branch==1?boundary.bEnd():boundary.thirdEnd()):Math.min(r.track.length,c+extent);
             boolean inner=j.kind()==Junction.Kind.Y&&r.sign==(r.branch==0?side:-side);
             double localStart=r.branch==0?bladeStart:secondStart;
             double step=.24; int count=(int)Math.ceil((end-start)/step);
+            V3 previous=null;boolean previousBlade=false;
             for(int i=0;i<count;i++) {
                 double d=start+(end-start)*i/count,e=start+(end-start)*(i+1)/count;
-                if(r.branch==1&&e<=localStart)continue;
-                if(inner&&crossing!=null){double toe=crossing.toe(r.branch),heel=crossing.heel(r.branch);if(d>=toe&&e<=heel)continue;if(d<toe&&e>toe)e=toe;else if(d<heel&&e>heel)d=heel;}
-                V3 a=running(r,d,offset),b=running(r,e,offset);
+                if(r.branch==1&&e<=(inner?localStart:stockStart)){previous=null;continue;}
+                if(r.branch==1&&!inner)d=Math.max(d,stockStart);
+                boolean clippedBoundary=false;
+                if(inner&&crossing!=null){double toe=crossing.toe(r.branch),heel=crossing.heel(r.branch);if(d>=toe&&e<=heel){previous=null;continue;}if(d<toe&&e>toe){e=toe;clippedBoundary=true;}else if(d<heel&&e>heel){d=heel;clippedBoundary=true;}}
                 double ta=1,tb=1;
                 boolean planed=inner&&e>localStart&&d<localStart+blade;
+                // Past the common approach, the opposite route's outer stock rail owns
+                // this side. Keep the animated blade exactly as before, but never leave
+                // the old 25 mm-wide step between the two fixed stock-rail paths.
+                if(r.branch==0&&inner&&!planed&&e<=localStart){
+                    if(d>=commonEnd){previous=null;continue;}
+                    e=Math.min(e,commonEnd);
+                }
+                // Reuse the preceding segment's endpoint on the same physical rail. The
+                // station formulas above are mathematically adjacent but their independent
+                // floating point evaluations can leave a hairline seam on the outer stock rail.
+                V3 a=previous!=null&&previousBlade==planed?previous:running(r,d,offset),b;
                 if(planed) {
                     // The switch rail is the route rail on its own side, so the fixed stock rail is
                     // never drawn beside it: not here, not at the tip, not in any blade position.
@@ -85,10 +100,14 @@ public final class PointMesh {
                     double open=r.branch==0?position:1-position;
                     ta=TurnoutFrame.taper(d-localStart,contact);tb=TurnoutFrame.taper(e-localStart,contact);
                     V3 ba=switchRail(r,d,ta,offset,open,localStart,blade,p,s),bb=switchRail(r,e,tb,offset,open,localStart,blade,p,s);
+                    if(previous!=null&&previousBlade)ba=previous;
                     mesh.rail(ba,bb,ta,tb,p,s,"blade");
+                    b=bb;
                 } else {
-                    mesh.rail(a,b,ta,tb,p,s,"rail");
+                    b=running(r,e,offset);
+                    mesh.rail(a,b,r.track.tangent(d).lateral(),r.track.tangent(e).lateral(),ta,tb,p,s,"rail");
                 }
+                if(clippedBoundary){previous=null;previousBlade=false;}else{previous=b;previousBlade=planed;}
             }
         }
         if(j.kind()==Junction.Kind.Y) {
@@ -97,7 +116,10 @@ public final class PointMesh {
             double at=bladeStart+Math.min(1,blade/3);V3 origin=j.a().at(at),forward=j.a().tangent(at);
             V3 a=TurnoutFrame.contact(j.a(),at,side,offset,position,bladeStart,blade,s,origin,forward);
             V3 b=TurnoutFrame.contact(j.b(),j.b().nearest(origin),-side,offset,1-position,secondStart,blade,s,origin,forward);
-            mesh.beam(a,b,.09,.09,p.top()+s.verticalOffset()-.07,p.top()+s.verticalOffset()-.03,p.steel(),"stretcher",-1);
+            // The stretcher sits immediately above the bearer.  Using the rail top here put
+            // the bar through the wheel flange; keep a small clearance over the sleeper top.
+            double bearerTop=(p.detail()==null?p.top()-p.railHeight():p.top()-p.detail().railTop()+p.detail().bearerTop())+s.verticalOffset();
+            mesh.beam(a,b,.09,.09,bearerTop+.01,bearerTop+.05,p.steel(),"stretcher",-1);
         }
         sleepers(mesh,j,s,p,extent,boundary);
         EndSleepers.finish(mesh,j,s,p,boundary);

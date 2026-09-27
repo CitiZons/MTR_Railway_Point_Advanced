@@ -18,6 +18,8 @@ public final class ThreeWayMesh {
         double blade=s.bladeLength()>0?s.bladeLength():Math.max(2,Math.min(9,(first-bladeStart)*.65));
         // Only the tip contact length is planed, exactly as in PointMesh.
         double contact=TurnoutFrame.contact(blade,p,s);
+        double stockStart=TurnoutFrame.stockStart(roads.get(2),roads.get(0),bladeStart);
+        double commonEnd=roads.get(0).nearest(roads.get(2).at(stockStart));
         double[] ends={boundary.aEnd(),boundary.thirdEnd(),boundary.bEnd()};
         double seam=Math.max(bladeStart+blade+.25,crossings.stream().mapToDouble(c->Math.min(c.frog.toe(0),c.frog.toe(1))).min().orElse(first));
         V3 seamOrigin=roads.get(1).at(seam),seamNormal=roads.get(1).tangent(seam);
@@ -35,11 +37,18 @@ public final class ThreeWayMesh {
             for(var cut:cuts){distances.add(Math.max(0,Math.min(end,cut[0])));distances.add(Math.max(0,Math.min(end,cut[1])));}
             boolean moving=branch==1||(branch==0?sign==1:sign==-1);
             var ds=new ArrayList<>(distances);
+            V3 previous=null;boolean previousBlade=false;
             for(int i=1;i<ds.size();i++){
-                double a=ds.get(i-1),b=ds.get(i),mid=(a+b)/2;if(cuts.stream().anyMatch(c->mid>c[0]&&mid<c[1]))continue;
-                if(branch>0&&b<=bladeStart)continue;
-                V3 x=rail(road,a,sign,p),y=rail(road,b,sign,p);double wa=1,wb=1;
-                if(moving&&b>bladeStart&&a<bladeStart+blade){
+                double a=ds.get(i-1),b=ds.get(i),mid=(a+b)/2;if(cuts.stream().anyMatch(c->mid>c[0]&&mid<c[1])){previous=null;continue;}
+                if(branch>0&&b<=(moving?bladeStart:stockStart)){previous=null;continue;}
+                if(branch>0&&!moving)a=Math.max(a,stockStart);
+                boolean planed=moving&&b>bladeStart&&a<bladeStart+blade;
+                if(branch==0&&moving&&!planed&&b<=bladeStart){
+                    if(a>=commonEnd){previous=null;continue;}
+                    b=Math.min(b,commonEnd);
+                }
+                V3 x=previous!=null&&previousBlade==planed?previous:rail(road,a,sign,p),y;double wa=1,wb=1;
+                if(planed){
                     wa=TurnoutFrame.taper(a-bladeStart,contact);wb=TurnoutFrame.taper(b-bladeStart,contact);
                     double open=Math.min(1,Math.abs(position-branch*.5)*2);
                     // A rail is never drawn along the blade's own line - at any blade position, in any
@@ -49,8 +58,11 @@ public final class ThreeWayMesh {
                     // animated topology keeps its fixed face count.
                     x=TurnoutFrame.blade(road,a,sign,p.centerOffset(),open,bladeStart,blade,s);
                     y=TurnoutFrame.blade(road,b,sign,p.centerOffset(),open,bladeStart,blade,s);
-                }
-                m.rail(x,y,wa,wb,p,s,moving&&b>bladeStart&&a<bladeStart+blade?"blade":"rail");
+                    if(previous!=null&&previousBlade)x=previous;
+                } else y=rail(road,b,sign,p);
+                if(planed)m.rail(x,y,wa,wb,p,s,"blade");
+                else m.rail(x,y,road.tangent(a).lateral(),road.tangent(b).lateral(),wa,wb,p,s,"rail");
+                previous=y;previousBlade=planed;
             }
         }
         for(var c:crossings)c.frog.build(m,Math.max(0,Math.min(1,(position-c.a*.5)/((c.b-c.a)*.5))));
@@ -64,14 +76,18 @@ public final class ThreeWayMesh {
             if(s.movableFrog()){
                 for(var c:crossings)fixed=DiamondGeometry.pocket(fixed,nose(c,crossings,0),nose(c,crossings,1),p.top()+s.verticalOffset()+j.center().y());
             }
-            for(var q:fixed.quads)Mesh.clip(before,q,seamOrigin,seamNormal.mul(-1));m=before;
+            for(var q:fixed.quads){
+                if(q.part().equals("wing"))q=new Mesh.Quad(q.a(),q.b(),q.c(),q.d(),q.surface(),q.part(),-2,q.uv());
+                Mesh.clip(before,q,seamOrigin,seamNormal.mul(-1));
+            }m=before;
             if(s.movableFrog())for(var c:crossings)m.quads.addAll(nose(c,crossings,Math.max(0,Math.min(1,(position-c.a*.5)/((c.b-c.a)*.5)))).quads);
         }
         for(int pair=0;pair<2;pair++){
             int a=pair,b=pair+1;double at=bladeStart+Math.min(1.1+pair*.35,blade/3);V3 origin=roads.get(a).at(at),forward=roads.get(a).tangent(at);
             V3 x=TurnoutFrame.contact(roads.get(a),at,1,p.centerOffset(),Math.min(1,Math.abs(position-a*.5)*2),bladeStart,blade,s,origin,forward);
             V3 y=TurnoutFrame.contact(roads.get(b),roads.get(b).nearest(origin),-1,p.centerOffset(),Math.min(1,Math.abs(position-b*.5)*2),bladeStart,blade,s,origin,forward);
-            m.beam(x,y,.09,.09,p.top()+s.verticalOffset()-.07,p.top()+s.verticalOffset()-.03,p.steel(),"stretcher",-1);
+            double bearerTop=(p.detail()==null?p.top()-p.railHeight():p.top()-p.detail().railTop()+p.detail().bearerTop())+s.verticalOffset();
+            m.beam(x,y,.09,.09,bearerTop+.01,bearerTop+.05,p.steel(),"stretcher",-1);
         }
         double[] lasts={boundary.aLast(),boundary.thirdLast(),boundary.bLast()};int index=0;
         for(double d:PointMesh.sleeperDistances(lasts[1],s.sleeperSpacing())){
@@ -115,7 +131,7 @@ public final class ThreeWayMesh {
             FrogGeometry frog=new FrogGeometry(pair,s,p,extent);double side=TurnoutFrame.side(pair,extent);
             for(int local=0;local<2;local++){
                 int road=local==0?a:b;Track t=roads.get(road);double sign=local==0?side:-side;
-                checks.add(new GuardRails.Run(t,Math.max(starts[road],frog.toe(local)),Math.min(ends[road],frog.heel(local)+.65),sign*(p.centerOffset()-p.headWidth()-gap),true,true,p,s));
+                checks.add(frog.checkWing(1-local));
                 checks.add(frog.guard(local));
             }
         }

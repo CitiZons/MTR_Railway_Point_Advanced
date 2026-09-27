@@ -9,13 +9,17 @@ public final class Regression {
     public static List<Track> y(){var a=new ArrayList<V3>();var b=new ArrayList<V3>();for(int i=0;i<=120;i++){double z=i*.25,x=.008*z*z;a.add(new V3(-x,0,z));b.add(new V3(x,0,z));}return List.of(new Track("a","0,0,0","-7,0,30",a),new Track("b","0,0,0","7,0,30",b),line("in","0,0,-20","0,0,0",new V3(0,0,-20),new V3(0,0,0)));}
     private static void require(boolean pass,String why){if(!pass)throw new AssertionError(why);}
     public static void main(String[] args)throws Exception{
+        org.mtrpoint.client.ReviewFixRegression.run();
+        org.mtrpoint.client.ScreenshotGeometryRegression.run();
+        org.mtrpoint.client.SavedWingRegression.run();
+        org.mtrpoint.client.GeometryTypeEnumerationRegression.run();
         List<Track> rails=y();var points=Detector.find(rails);require(points.size()==1&&points.get(0).kind()==Junction.Kind.Y,"Y classification");
         Junction y=points.get(0);Mesh left=PointMesh.build(y,PointSettings.DEFAULT,Profile.STANDARD,0),right=PointMesh.build(y,PointSettings.DEFAULT,Profile.STANDARD,1);
         var selectableGuards=GuardRails.selectable(y,PointSettings.DEFAULT,Profile.STANDARD,null,null);
-        require(selectableGuards.size()==4&&GuardRails.assembled(y,PointSettings.DEFAULT,Profile.STANDARD,null,null).size()==2,"Both yellow check wings selectable while native steel stays in place");
+        require(selectableGuards.size()==4&&GuardRails.assembled(y,PointSettings.DEFAULT,Profile.STANDARD,null,null).size()==4,"Both guards and connected check wings enter the shared assembly");
         var wing=selectableGuards.get(2);var wingEdit=PointSettings.DEFAULT.guard(2,new PointSettings.GuardEdit(wing.start(),wing.end(),wing.flareStart(),wing.flareEnd(),""));
         require(AppearanceData.decode(AppearanceData.JSON.toJson(wingEdit)).guardEdits().equals(wingEdit.guardEdits()),"Guard intervals survive appearance save/load");
-        require(GuardRails.assembled(y,wingEdit,Profile.STANDARD,null,null).size()==3,"Edited yellow wing enters the shared assembly");
+        require(GuardRails.assembled(y,wingEdit,Profile.STANDARD,null,null).size()==4,"Editing a wing preserves the four shared intervals");
         require(PointMesh.build(y,wingEdit,Profile.STANDARD,0).quads.stream().filter(q->q.part().equals("wing")).count()
             <left.quads.stream().filter(q->q.part().equals("wing")).count(),"Edited yellow wing replaces, rather than duplicates, native steel");
         var first=selectableGuards.get(0);var second=new GuardRails.Run(first.road(),first.start()+.4,first.end()+.4,first.offset()+.05,true,true,first.profile(),first.settings(),"editor-test");
@@ -62,11 +66,11 @@ public final class Regression {
         require(Detector.find(opposite).stream().filter(v->v.kind()==Junction.Kind.Y).count()==2,"Both Y sides at one four-arm node");
         var three=new ArrayList<>(List.of(rails.get(0),rails.get(1),line("middle","0,0,0","0,0,30",new V3(0,0,0),new V3(0,0,30))));
         var triple=Detector.find(three);require(triple.size()==1&&triple.get(0).kind()==Junction.Kind.THREE,"Three-way fan has one independent editor");
-        require(GuardRails.assembled(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,null,null).isEmpty(),"Unedited three-way checks stay in the baseline assembly");
+        require(GuardRails.assembled(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,null,null).size()==12,"All three-way checks enter the shared assembly");
         var threeChecks=GuardRails.selectable(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,null,null);
         require(threeChecks.size()==12,"All three-way check rails have editor identities");
         var check=threeChecks.get(0);var threeEdit=PointSettings.DEFAULT.guard(0,new PointSettings.GuardEdit(check.start(),check.end(),check.flareStart(),check.flareEnd(),""));
-        require(GuardRails.assembled(triple.get(0),threeEdit,Profile.STANDARD,null,null).size()==1,"Three-way manual edit reaches the world assembly");
+        require(GuardRails.assembled(triple.get(0),threeEdit,Profile.STANDARD,null,null).size()==12,"Three-way manual edit preserves the shared intervals");
         Mesh t0=PointMesh.build(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,0),tm=PointMesh.build(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,.5),t1=PointMesh.build(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,1);
         require(t0.quads.size()==tm.quads.size()&&tm.quads.size()==t1.quads.size(),"Three-way animation topology");
         require(!t0.quads.equals(tm.quads)&&!tm.quads.equals(t1.quads),"Three distinct blade positions");
@@ -88,6 +92,13 @@ public final class Regression {
         }
         require(PointMesh.build(y,PointSettings.DEFAULT.with(16,1),Profile.STANDARD,0).quads.stream().filter(q->q.part().equals("sleeper")&&q.index()==12).count()<ties.size(),"V and parallel patterns differ");
         checkFixedHeart();
+        StockSectionSeamRegression.run();
+        org.mtrpoint.client.StockApproachRegression.run();
+        org.mtrpoint.client.VSectionIntersectionRegression.run();
+        org.mtrpoint.client.EndcapPatchRegression.handovers();
+        org.mtrpoint.client.EndcapPatchRegression.patches();
+        StretcherHeightRegression.run();
+        GuardMergeRegression.run();
         CurvedTurnoutRegression.run();
         DiamondRegression.run();
         ReportedGeometryRegression.run();
@@ -106,6 +117,7 @@ public final class Regression {
         org.mtrpoint.client.ObliqueCapRegression.run();
         org.mtrpoint.client.ScissorsGeometryRegression.run();
         SwitchBladeRegression.run();
+        FrogWingConnectionRegression.run();
         // Runs last: its failing fixtures must not stop the blade and scissors protection suites.
         org.mtrpoint.client.UniversalCrossingRegression.run();
         System.out.println("     oblique rail end faces emitted by the whole suite: "+DiamondGeometry.OBLIQUE_CAPS);

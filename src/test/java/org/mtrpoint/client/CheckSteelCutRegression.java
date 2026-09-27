@@ -58,10 +58,14 @@ public final class CheckSteelCutRegression {
         // head band and require exactly one owner face, so a cut may not eat steel or leave it
         // doubled. Runs are allowed to yield only inside a channel or under a crossing rail.
         var runs=new ArrayList<GuardRails.Run>();
-        for(var j:junctions)if(j.kind()==Junction.Kind.Y)runs.addAll(GuardRails.assembled(j,s,raw,null,null));
+        for(var j:junctions)runs.addAll(GuardRails.assembled(j,s,raw,null,null));
         require(runs.size()>=2,"Turnout produced no pooled guard runs");
+        var obstacles=views.stream().map(v->new DiamondGeometry.Steel(v.mesh(),top,p,s,v.crossingRoads())).toList();
+        // Include every owner before merging: a diamond can absorb a turnout's terminal
+        // bend, so isolated turnout mouths are no longer the world geometry.
+        var finished=DiamondGeometry.finishedGuards(runs,obstacles);
         int swept=0;
-        for(var run:runs)for(double d=run.start()+.05;d<run.end()-.05;d+=.02)for(int step=-1;step<=1;step++){
+        for(var run:finished)for(double d=run.start()+.05;d<run.end()-.05;d+=.02)for(int step=-1;step<=1;step++){
             V3 q=run.point(d).add(run.road().tangent(d).lateral().mul(step*.01));
             if(blockedByChannel(roads,q,p,s)||underForeignRail(roads,run.road().id,q,p))continue;
             var hit=cover(heads,q);
@@ -80,7 +84,9 @@ public final class CheckSteelCutRegression {
         var liftedHeads=headTops(lifted,p.top()+.3+s.verticalOffset());
         require(!liftedHeads.isEmpty(),"Raised turnout carries no running-surface steel");
         int kept=0;
-        for(var run:runs)for(double d=run.start()+.05;d<run.end()-.05;d+=.02){
+        var raisedRuns=new ArrayList<GuardRails.Run>();
+        for(var j:junctions)if(j.kind()==Junction.Kind.Y)raisedRuns.addAll(GuardRails.assembled(j,raised,raw,null,null));
+        for(var run:GuardRails.exposeEnds(GuardRails.merge(raisedRuns)))for(double d=run.start()+.05;d<run.end()-.05;d+=.02){
             V3 q=run.point(d).add(0,.3,0);
             if(blockedByChannel(roads,q,p,s))continue;
             require(!cover(liftedHeads,q).isEmpty(),"An elevated crossing removed check steel at "+q);

@@ -211,8 +211,9 @@ public final class ObliqueCapRegression{
 
     private static boolean uvMatches(Mesh.Quad q){
         if(q.uv()==null||q.uv().size()!=8||q.surface()==null)return false;
-        double u=(q.surface().u0()+q.surface().u1())/2D,v=(q.surface().v0()+q.surface().v1())/2D;
-        for(int i=0;i<8;i+=2)if(Math.abs(q.uv().get(i)-u)>1e-5||Math.abs(q.uv().get(i+1)-v)>1e-5)return false;
+        var s=q.surface();
+        for(int i=0;i<8;i+=2)if(q.uv().get(i)<Math.min(s.u0(),s.u1())-1e-5||q.uv().get(i)>Math.max(s.u0(),s.u1())+1e-5
+            ||q.uv().get(i+1)<Math.min(s.v0(),s.v1())-1e-5||q.uv().get(i+1)>Math.max(s.v0(),s.v1())+1e-5)return false;
         return true;
     }
     private static V3 tangent(Track t,V3 point){

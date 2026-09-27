@@ -11,6 +11,7 @@ public final class DiamondGeometry {
     private record Plane(V3 n,double d) {
         Plane(V3 n,V3 p){this(n,n.dot(p));}
         Plane reverse(){return new Plane(n.mul(-1),-d);}
+        double height(V3 point){return (d-n.x()*point.x()-n.z()*point.z())/n.y();}
         V3 origin(){return n.mul(d/n.dot(n));}
     }
     private record Span(int road,int line,V3 a,V3 b,Plane start,Plane end,double width,String part,boolean first,boolean last,boolean cutter) {
@@ -61,28 +62,42 @@ public final class DiamondGeometry {
     }
     public static void three(Mesh out,Junction j,PointSettings s,Profile p,double[] starts,double[] ends){
         var rails=new ArrayList<Span>();var channels=new ArrayList<Span>();var checks=new ArrayList<GuardRails.Run>();
+        record Throat(int road,double sign,double from,double to){}
+        var throats=new ArrayList<Throat>();
         double gap=Math.max(.02,s.flangeway()+s.wingGapDelta()),width=Math.max(p.headWidth(),p.footWidth());
         for(int a=0;a<3;a++)for(int b=a+1;b<3;b++){
             Junction pair=new Junction(j.id(),Junction.Kind.Y,j.tracks().get(a),j.tracks().get(b),j.center(),0,0,j.extent());
             FrogGeometry frog=new FrogGeometry(pair,s,p,PointMesh.extent(j,s));double side=TurnoutFrame.side(pair,PointMesh.extent(j,s));
             for(int local=0;local<2;local++){
                 int road=local==0?a:b;Track t=j.tracks().get(road);double sign=local==0?side:-side;
-                checks.add(new GuardRails.Run(t,Math.max(starts[road],frog.toe(local)),Math.min(ends[road],frog.heel(local)+.65),sign*(p.centerOffset()-p.headWidth()-gap),true,true,p,s,"","wing"));
+                // The incoming closure rail turns at its knee into the opposite route's wing.
+                // Keep that connection instead of placing a detached parallel check beside it.
+                checks.add(frog.checkWing(1-local));
                 checks.add(frog.guard(local));
+                throats.add(new Throat(road,sign,frog.knee(local),frog.crossingStation(local)));
             }
         }
         for(int road=0;road<3;road++){
             Track t=j.tracks().get(road);
             for(int sign:new int[]{-1,1}){
                 int id=road*2+(sign>0?1:0);
-                rails.addAll(path(t,starts[road],ends[road],sign*p.centerOffset(),0,road,id,width,"rail"));
+                int index=road;var cuts=throats.stream().filter(c->c.road==index&&c.sign==sign).sorted(Comparator.comparingDouble(Throat::from)).toList();
+                double from=starts[road];
+                for(var cut:cuts){
+                    double to=Math.min(ends[road],cut.from);
+                    if(to>from)rails.addAll(path(t,from,to,sign*p.centerOffset(),0,road,id,width,"rail"));
+                    from=Math.max(from,cut.to);
+                }
+                if(ends[road]>from)rails.addAll(path(t,from,ends[road],sign*p.centerOffset(),0,road,id,width,"rail"));
                 channels.addAll(path(t,starts[road],ends[road],sign*(p.centerOffset()-p.headWidth()/2-gap/2),0,road,id,gap,"channel"));
             }
         }
         int id=6;
         var originalChecks=new ArrayList<GuardRails.Run>();
         for(int i=0;i<checks.size();i++)if(!s.guardEdits().containsKey(i))originalChecks.add(checks.get(i));
-        for(var run:GuardRails.merge(originalChecks))if(run.end()>run.start()){rails.addAll(path(run,id,id,width));id++;}
+        Mesh running=new Mesh();for(var rail:rails)running.rail(rail.a,rail.b,1,1,p,s,"rail");
+        var obstacles=List.of(new Steel(running,p.top()+s.verticalOffset(),p,s,j.tracks()));
+        for(var run:finishedGuards(originalChecks,obstacles))if(run.end()>run.start()){rails.addAll(path(run,id,id,width));id++;}
         bake(out,rails,own(p,s,channels),List.of(),p,s);
     }
     /** Reserve a fixed pocket for the complete throw of a moving crossing insert. */
@@ -110,7 +125,7 @@ public final class DiamondGeometry {
     public static Mesh guards(List<GuardRails.Run> runs,List<Steel> steel){
         Mesh out=new Mesh();record Style(Profile p,double height){}
         var groups=new LinkedHashMap<Style,List<GuardRails.Run>>();
-        for(var r:GuardRails.merge(runs))groups.computeIfAbsent(new Style(r.profile(),r.settings().verticalOffset()),k->new ArrayList<>()).add(r);
+        for(var r:finishedGuards(runs,steel))groups.computeIfAbsent(new Style(r.profile(),r.settings().verticalOffset()),k->new ArrayList<>()).add(r);
         for(var group:groups.values()){
             Profile p=group.get(0).profile();PointSettings s=group.get(0).settings();double top=p.top()+s.verticalOffset();
             var rails=new ArrayList<Span>();int id=0;
@@ -120,7 +135,7 @@ public final class DiamondGeometry {
                     if(coveredEnd(original,original.start(),other))start=false;
                     if(coveredEnd(original,original.end(),other))end=false;
                 }
-                var run=new GuardRails.Run(original.road(),original.start(),original.end(),original.offset(),start,end,p,original.settings(),original.mergeGroup(),original.part());
+                var run=new GuardRails.Run(original.road(),original.start(),original.end(),original.offset(),start,end,p,original.settings(),original.mergeGroup(),original.part(),original.attachedStart(),original.attachedEnd());
                 for(var span:path(run,id,id,Math.max(p.headWidth(),p.footWidth())))rails.add(new Span(span.road,span.line,span.a,span.b,span.start,span.end,span.width,run.part(),span.first,span.last,false));id++;
             }
             bake(out,rails,crossingChannels(steel,top,p.railHeight()),crossingRails(steel,top,p.railHeight()),p,s);
@@ -132,7 +147,6 @@ public final class DiamondGeometry {
     private static Map<Double,List<Span>> crossingChannels(List<Steel> steel,double top,double railHeight){
         var result=new TreeMap<Double,List<Span>>();
         for(Steel other:steel){
-            if(Math.abs(other.top()-top)>railHeight)continue;
             var list=result.computeIfAbsent(other.top(),k->new ArrayList<>());
             list.addAll(channels(other.roads(),other.profile(),other.settings()));
         }
@@ -158,16 +172,7 @@ public final class DiamondGeometry {
     public static Mesh cutChannels(Mesh source,List<Track> roads,Profile p,PointSettings s,double top){
         return cutChannels(source,roads,p,s,top,false);
     }
-    /**
-     * Cut flange channels while keeping a fixed number of face slots for an animated turnout.
-     * A channel can split one long head face into a different number of outside fragments at the
-     * three endpoint poses (the taper changes the intersection by a few microns).  The renderer
-     * interpolates cached quads by index, so allowing that variable list to escape here either
-     * throws or pairs unrelated faces.  The stable path keeps the real clipped fragments and pads
-     * the remainder with zero-area quads carrying the same material/part metadata.  Four slots are
-     * sufficient for a convex rail face minus the four-sided channel prism; non-rail support faces
-     * retain the ordinary variable clipping path.
-     */
+    /** All fragments are retained. Animated callers align the clipping trees across their poses. */
     public static Mesh cutChannels(Mesh source,List<Track> roads,Profile p,PointSettings s,double top,boolean fixedTopology){
         var cutters=channels(roads,p,s);
         if(cutters.isEmpty())return source;
@@ -180,27 +185,132 @@ public final class DiamondGeometry {
             // stable seam side; crossing channels are applied to the static rail/frog/support
             // faces instead.
             if(q.part().equals("blade")){out.quad(q);continue;}
-            double high=-Double.MAX_VALUE;
-            for(V3 v:List.of(q.a(),q.b(),q.c(),q.d()))high=Math.max(high,v.y());
             var section=new Mesh();section.quad(q);
-            if(high>top-.055){
-                Span face=spine(q,layerWidth(q,p,top));
-                if(face!=null)for(Span channel:nearby(face,channelBins))
-                    if(channel.line!=face.line&&meets(q,face,channel))
-                        section=clipLayer(section,channel.channel(),p,top,top-.055);
-            }
-            if(fixedTopology&&(q.part().equals("rail")||q.part().equals("frog")||q.part().equals("stretcher"))&&high>top-.055){
-                // A convex face clipped by the four channel side planes has at most four outside
-                // pieces.  Keep every real piece, then fill the stable slot count with degenerates.
-                int slots=4;int kept=Math.min(slots,section.quads.size());
-                for(int i=0;i<kept;i++)out.quad(section.quads.get(i));
-                Mesh.Quad seed=kept>0?section.quads.get(kept-1):q;
-                for(int i=kept;i<slots;i++){
-                    V3 v=seed.a();out.quad(new Mesh.Quad(v,v,v,v,seed.surface(),seed.part(),seed.index(),seed.uv()));
-                }
-            }else out.quads.addAll(section.quads);
+            Span face=spine(q,Math.max(p.headWidth(),p.footWidth()));
+            if(face!=null)for(Span channel:nearby(face,channelBins))
+                if(channel.line!=face.line&&meets(q,face,channel))
+                    section=clipChannel(section,channel,top);
+            out.quads.addAll(section.quads);
         }
         return out;
+    }
+    /** A crossing guard remains one longitudinal run. Only its two physical terminals flare;
+     * wheel channels are carved into the section later, without making new internal mouths. */
+    public static List<GuardRails.Run> finishedGuards(List<GuardRails.Run> runs,List<Steel> steel){
+        if(steel.isEmpty())return GuardRails.exposeEnds(GuardRails.merge(runs));
+        var obstacles=crossingRails(steel,0,0);
+        // A mouth must finish before the wheel clearance as well as before the running head;
+        // otherwise the later channel bake cuts off the inward bend we have just generated.
+        var channelOwners=new HashMap<Span,String>();
+        for(var other:steel)for(var road:other.roads())for(var channel:channels(List.of(road),other.profile(),other.settings())){
+            var obstacle=new Span(channel.road,channel.line,channel.a.add(0,other.top(),0),channel.b.add(0,other.top(),0),
+                channel.start,channel.end,channel.width,channel.part,channel.first,channel.last,true);
+            if(channelOwners.putIfAbsent(obstacle,road.id)==null)obstacles.add(obstacle);
+        }
+        var bins=bins(obstacles);var result=GuardRails.exposeEnds(GuardRails.merge(runs));
+        var finished=new ArrayList<GuardRails.Run>();
+        for(var run:result){
+            // On an acute crossing the inward bend can reach a channel before the straight
+            // working part does. Move the mouth back until the complete bend fits.
+            while(run.end()-run.start()>.12){
+                boolean start=mouthClear(run,true,bins,channelOwners),end=mouthClear(run,false,bins,channelOwners);
+                if(start&&end){finished.add(run);break;}
+                run=new GuardRails.Run(run.road(),run.start()+(start?0:.02),run.end()-(end?0:.02),run.offset(),
+                    run.flareStart(),run.flareEnd(),run.profile(),run.settings(),run.mergeGroup(),run.part(),run.attachedStart(),run.attachedEnd());
+            }
+        }
+        return List.copyOf(finished);
+    }
+    private static boolean mouthClear(GuardRails.Run run,boolean start,Map<Long,List<Span>> bins,Map<Span,String> channelOwners){
+        if(!(start?run.flareStart():run.flareEnd()))return true;
+        double length=Math.min(.4,run.end()-run.start());int steps=Math.max(1,(int)Math.ceil(length/.02));
+        for(int i=0;i<=steps;i++){
+            double d=start?run.start()+length*i/steps:run.end()-length*i/steps;
+            if(!guardClear(run,run.point(d),bins,channelOwners))return false;
+        }
+        return true;
+    }
+    private static boolean guardClear(GuardRails.Run run,V3 at,Map<Long,List<Span>> bins,Map<Span,String> channelOwners){
+        double top=at.y()+run.profile().top()+run.settings().verticalOffset();
+        for(var other:bins.getOrDefault(cell((int)Math.floor(at.x()),(int)Math.floor(at.z())),List.of())){
+            // The own-road gap is already built into the offset; independently sampled curves
+            // must not turn its touching boundary into a sequence of false interruptions.
+            if(run.road().id.equals(channelOwners.get(other)))continue;
+            // Connected wings join the running steel. The union bake resolves their overlap;
+            // only a wheel channel can interrupt this rail, not another head's bounding strip.
+            if(!other.part.equals("channel")&&(run.attachedStart()||run.attachedEnd()))continue;
+            if(Math.abs(other.level(0).height(at)-top)>.01)continue;
+            V3 delta=other.b.sub(other.a);double length=delta.x()*delta.x()+delta.z()*delta.z();if(length<1e-12)continue;
+            double along=((at.x()-other.a.x())*delta.x()+(at.z()-other.a.z())*delta.z())/length;
+            if(along<0||along>1)continue;
+            double distance=Math.abs(at.sub(other.a).dot(other.normal()));
+            double margin=other.part.equals("channel")?-1e-5:.003;
+            if(distance<(run.profile().headWidth()+other.width)/2+margin)return false;
+        }
+        return true;
+    }
+    /** Shared clipping-tree addresses keep fragments paired between animation poses.
+     * Each address lies outside the same cutter half-spaces in every pose, so interpolation
+     * cannot sweep a surviving face back across a flange channel. Missing fragments collapse
+     * to a point in their surviving counterpart; no finite-area fragment is discarded. */
+    public static List<Mesh> cutChannelFrames(List<Mesh> frames,List<Track> roads,Profile p,PointSettings s){
+        if(roads.isEmpty())return frames;
+        int count=frames.get(0).quads.size();
+        if(frames.stream().anyMatch(m->m.quads.size()!=count))throw new IllegalArgumentException("Uncut animation topology differs");
+        var result=new ArrayList<Mesh>();for(var frame:frames)result.add(new Mesh());
+        var bins=bins(channels(roads,p,s));double top=p.top()+s.verticalOffset();
+        for(int index=0;index<count;index++){
+            var originals=new ArrayList<Mesh.Quad>();for(var frame:frames)originals.add(frame.quads.get(index));
+            Mesh.Quad first=originals.get(0);
+            // Moving blades use the same clipping-tree pairing as moving frogs. An unrelated
+            // crossing can intersect a blade even when it lies before the turnout's frog.
+            var candidates=new LinkedHashSet<Span>();
+            for(var q:originals){Span face=spine(q,Math.max(p.headWidth(),p.footWidth()));if(face!=null)
+                for(Span channel:nearby(face,bins))if(meets(q,face,channel))candidates.add(channel);}
+            if(candidates.isEmpty()){for(int i=0;i<frames.size();i++)result.get(i).quad(originals.get(i));continue;}
+            boolean stationary=originals.stream().allMatch(first::equals);
+            if(stationary){
+                Mesh cut=new Mesh();cut.quad(first);
+                for(Span channel:candidates)cut=clipChannel(cut,channel,top);
+                for(Mesh output:result)output.quads.addAll(cut.quads);continue;
+            }
+            var poses=new ArrayList<Map<String,Mesh.Quad>>();var keys=new TreeSet<String>();
+            for(var q:originals){
+                Map<String,Mesh.Quad> pieces=new TreeMap<>();pieces.put("",q);
+                for(Span channel:candidates){
+                    Map<String,Mesh.Quad> next=new TreeMap<>();
+                    for(var piece:pieces.entrySet())partition(next,piece.getKey(),piece.getValue(),channelPlanes(channel,top));
+                    pieces=next;
+                }
+                poses.add(pieces);keys.addAll(pieces.keySet());
+            }
+            for(String key:keys){
+                Mesh.Quad seed=null;for(var pose:poses)if(pose.containsKey(key)){seed=pose.get(key);break;}
+                V3 anchor=seed.center();
+                for(int i=0;i<poses.size();i++){
+                    var q=poses.get(i).get(key);
+                    result.get(i).quad(q!=null?q:new Mesh.Quad(anchor,anchor,anchor,anchor,seed.surface(),seed.part(),seed.index(),seed.uv()));
+                }
+            }
+        }
+        return result;
+    }
+    private static void partition(Map<String,Mesh.Quad> out,String key,Mesh.Quad q,List<Plane> planes){
+        Map<String,Mesh.Quad> inside=new TreeMap<>();inside.put(key,q);
+        for(int i=0;i<planes.size();i++){
+            Plane plane=planes.get(i);Map<String,Mesh.Quad> next=new TreeMap<>();
+            for(var entry:inside.entrySet()){
+                var face=entry.getValue();double min=Double.MAX_VALUE,max=-Double.MAX_VALUE;
+                for(V3 v:List.of(face.a(),face.b(),face.c(),face.d())){double d=plane.n.dot(v)-plane.d;min=Math.min(min,d);max=Math.max(max,d);}
+                if(max<=1e-10){next.put(entry.getKey(),face);continue;}
+                if(min>=-1e-10){out.put(entry.getKey()+"/"+i+":0",face);continue;}
+                Mesh outside=new Mesh(),remaining=new Mesh();
+                Mesh.clip(outside,face,plane.origin(),plane.n.mul(-1));Mesh.clip(remaining,face,plane.origin(),plane.n);
+                for(int k=0;k<outside.quads.size();k++)out.put(entry.getKey()+"/"+i+":"+k,outside.quads.get(k));
+                for(int k=0;k<remaining.quads.size();k++)next.put(entry.getKey()+"."+i+":"+k,remaining.quads.get(k));
+            }
+            inside=next;if(inside.isEmpty())break;
+        }
     }
     /** The swept running steel of every crossing rail offered as a cutter: its own centre line and
      *  the width of the course that shares the running surface. Only the head course is offered,
@@ -210,11 +320,11 @@ public final class DiamondGeometry {
     private static List<Span> crossingRails(List<Steel> steel,double top,double railHeight){
         var result=new ArrayList<Span>();
         for(Steel other:steel){
-            if(Math.abs(other.top()-top)>railHeight)continue;
             for(var q:other.mesh().quads){
                 if(!isCrossingSteel(q.part()))continue;
+                Plane level=roadLevel(q.center(),other.roads(),other.top());
                 boolean head=true;
-                for(V3 v:List.of(q.a(),q.b(),q.c(),q.d()))if(Math.abs(v.y()-other.top())>1e-6)head=false;
+                for(V3 v:List.of(q.a(),q.b(),q.c(),q.d()))if(Math.abs(level.n.dot(v)-level.d)>.004)head=false;
                 if(!head)continue;
                 Span span=spine(q,other.profile().headWidth());if(span!=null)result.add(cutter(span));
             }
@@ -260,11 +370,17 @@ public final class DiamondGeometry {
     }
     /** Distance between two swept centre lines in plan, ignoring their height. */
     private static double planar(V3 a,V3 b,V3 c,V3 d){
-        double ux=b.x()-a.x(),uz=b.z()-a.z(),vx=d.x()-c.x(),vz=d.z()-c.z(),wx=a.x()-c.x(),wz=a.z()-c.z();
-        double uu=ux*ux+uz*uz,vv=ux*vx+uz*vz,ww=vx*vx+vz*vz,uw=ux*wx+uz*wz,vw=vx*wx+vz*wz,den=uu*ww-vv*vv;
-        if(den<1e-12)return Math.min(pointSegment(a.x(),a.z(),ux,uz,uu,c.x(),c.z()),pointSegment(c.x(),c.z(),vx,vz,ww,a.x(),a.z()));
-        double s=Math.max(0,Math.min(1,(vv*vw-ww*uw)/den)),t=Math.max(0,Math.min(1,(uu*vw-vv*uw)/den));
-        return Math.hypot(wx+s*ux-t*vx,wz+s*uz-t*vz);
+        double ux=b.x()-a.x(),uz=b.z()-a.z(),vx=d.x()-c.x(),vz=d.z()-c.z(),wx=c.x()-a.x(),wz=c.z()-a.z();
+        double uu=ux*ux+uz*uz,vv=vx*vx+vz*vz,den=ux*vz-uz*vx;
+        if(Math.abs(den)>1e-12){
+            double s=(wx*vz-wz*vx)/den,t=(wx*uz-wz*ux)/den;
+            if(s>=0&&s<=1&&t>=0&&t<=1)return 0;
+        }
+        // If the intersection is outside either finite segment, the nearest pair includes
+        // an endpoint. Clamping both infinite-line parameters independently overestimates
+        // this distance and misses cutters near a sampled curve's cell boundary.
+        return Math.min(Math.min(pointSegment(c.x(),c.z(),ux,uz,uu,a.x(),a.z()),pointSegment(d.x(),d.z(),ux,uz,uu,a.x(),a.z())),
+            Math.min(pointSegment(a.x(),a.z(),vx,vz,vv,c.x(),c.z()),pointSegment(b.x(),b.z(),vx,vz,vv,c.x(),c.z())));
     }
     private static double pointSegment(double px,double pz,double ux,double uz,double uu,double qx,double qz){
         if(uu<1e-12)return Math.hypot(px-qx,pz-qz);
@@ -312,6 +428,25 @@ public final class DiamondGeometry {
         bounded.add(new Plane(new V3(0,1,0),Math.min(floor,top)).reverse());
         return subtract(section,bounded,false,new Plane(new V3(0,1,0),top));
     }
+    private static Plane roadLevel(V3 point,List<Track> roads,double height){
+        Track best=null;double station=0,error=Double.MAX_VALUE;
+        for(Track road:roads){double d=road.nearest(point);double e=road.at(d).distance(point);if(e<error){error=e;station=d;best=road;}}
+        if(best==null)return new Plane(new V3(0,1,0),height);
+        V3 at=best.at(station),u=best.tangent(station);double horizontal=u.x()*u.x()+u.z()*u.z();
+        if(horizontal<1e-12)return new Plane(new V3(0,1,0),at.y()+height);
+        V3 normal=new V3(-u.x()*u.y()/horizontal,1,-u.z()*u.y()/horizontal);
+        return new Plane(normal,normal.dot(at)+height);
+    }
+    private static List<Plane> channelPlanes(Span channel,double height){
+        Plane level=channel.level(height);var planes=new ArrayList<>(channel.channel());
+        // A channel is a finite band in the cutter road's world coordinate frame.
+        planes.add(new Plane(level.n,level.d-.055).reverse());
+        planes.add(new Plane(level.n,level.d+.005));
+        return planes;
+    }
+    private static Mesh clipChannel(Mesh section,Span channel,double height){
+        return subtract(section,channelPlanes(channel,height),false,channel.level(height));
+    }
     /** True when a plane really severs some face of this steel: a cutter that merely passes beside
      *  it leaves no end face behind. */
     private static boolean severed(Mesh source,Plane plane){
@@ -329,14 +464,22 @@ public final class DiamondGeometry {
      *  so it closes the cut instead of becoming a covering plate. A plane that only runs alongside
      *  the rail is a flangeway wall and gets no end face. */
     private static Mesh cut(Mesh section,List<Plane> planes,boolean walls,Plane top,V3 onRail,V3 direction,Profile p,PointSettings s,String part,double floor){
-        Mesh out=subtract(section,planes,walls,top);
+        // Close cuts from the real I-section below. Extruding a head edge down by
+        // flange depth makes a rectangular plate in the empty notch beside the web.
+        Mesh out=subtract(section,planes,false,top);
         V3 axis=horizontal(direction);if(axis.dot(axis)<1e-12)return out;
-        for(Plane plane:planes){
+        double first=Double.POSITIVE_INFINITY,last=Double.NEGATIVE_INFINITY;
+        for(var q:section.quads)for(V3 v:List.of(q.a(),q.b(),q.c(),q.d())){double at=v.dot(axis);first=Math.min(first,at);last=Math.max(last,at);}
+        if(first>last)return out;
+        // The first two planes delimit sampled cutter cells, not exposed steel.
+        // Height limits likewise do not create transverse rail end sections.
+        for(int side=2;side<Math.min(4,planes.size());side++){
+            Plane plane=planes.get(side);
             double length=Math.sqrt(plane.n.dot(plane.n));if(length<1e-12)continue;
             V3 unit=plane.n.mul(1/length);double facing=unit.dot(axis);
-            if(Math.abs(facing)<.3)continue;
+            if(Math.abs(facing)<1e-7)continue;
             if(!severed(section,plane))continue;
-            V3 center=onRail.add(axis.mul((plane.d-unit.dot(onRail))/facing));
+            V3 center=onRail.add(axis.mul((plane.d/length-unit.dot(onRail))/facing));
             // Winding measured, not inferred: the end-face regression counts faces "wound into their
             // own material" and "wound away from it" on real crossings, and reversing this flag made
             // 4..11 oblique faces point into the material with none pointing away. The original flag
@@ -359,13 +502,43 @@ public final class DiamondGeometry {
             }
             var bounded=new ArrayList<Plane>();
             for(Plane other:planes)if(other!=plane)bounded.add(other);
-            if(floor<top.d)bounded.add(new Plane(new V3(0,1,0),floor).reverse());
-            out.quads.addAll(subtract(capMesh,bounded,false,top).quads);
+            // An oblique cut through a flared mouth must not extrapolate its section
+            // beyond the actual source span into a neighbouring straight run.
+            bounded.add(new Plane(axis,last));bounded.add(new Plane(axis.mul(-1),-first));
+            if(floor<top.d)bounded.add(new Plane(top.n,floor).reverse());
+            // A cut cap belongs only to the patch inside every other cutter plane.
+            // Taking the complement creates detached copies outside the actual cut.
+            for(Plane bound:bounded){
+                if(bound.n.dot(bound.n)<1e-16){if(bound.d< -1e-10)capMesh=new Mesh();continue;}
+                Mesh clipped=new Mesh();for(var q:capMesh.quads)Mesh.clip(clipped,q,bound.origin(),bound.n);capMesh=clipped;
+            }
+            for(var q:capMesh.quads)out.quad(walls&&(part.equals("rail")||part.equals("frog"))?new Mesh.Quad(q.a(),q.b(),q.c(),q.d(),q.surface(),"frog_wall",q.index(),q.uv()):q);
         }
         return out;
     }
     private static V3 shear(V3 v,Plane plane,V3 unit,V3 axis,double facing){
-        return v.add(axis.mul((plane.d-unit.dot(v))/facing));
+        return v.add(axis.mul((plane.d/plane.n.length()-unit.dot(v))/facing));
+    }
+    /** A single web/foot face cannot locate the rail centre. Only the running
+     *  surface defines a complete head course, and any cap inferred there must
+     *  remain inside that surviving course's footprint (including prior cuts). */
+    private static Mesh cutFace(Mesh section,Mesh.Quad face,List<Plane> planes,Plane level,V3 onRail,V3 direction,Profile p,PointSettings s,double floor){
+        var vertices=List.of(face.a(),face.b(),face.c(),face.d());
+        if(face.surface().equals(Profile.END_STEEL)||vertices.stream().anyMatch(v->Math.abs(level.n.dot(v)-level.d)>1e-6))
+            return subtract(section,planes,false,level);
+        Mesh cut=cut(section,planes,false,level,onRail,direction,p,s,face.part(),floor),out=new Mesh();
+        for(var q:cut.quads){
+            if(!q.surface().equals(Profile.END_STEEL)){out.quad(q);continue;}
+            Mesh cap=new Mesh();cap.quad(q);
+            for(int i=0;i<4;i++){
+                V3 a=vertices.get(i),b=vertices.get((i+1)%4),normal=b.sub(a).lateral();
+                if(normal.dot(normal)<1e-12)continue;
+                if(face.center().sub(a).dot(normal)>0)normal=normal.mul(-1);
+                Mesh clipped=new Mesh();for(var c:cap.quads)Mesh.clip(clipped,c,a,normal);cap=clipped;
+            }
+            out.quads.addAll(cap.quads);
+        }
+        return out;
     }
     private static List<Plane> bisectors(Span rail,Span other){
         V3 a=rail.normal(),b=other.normal();double da=a.dot(rail.a),db=b.dot(other.a);
@@ -379,33 +552,44 @@ public final class DiamondGeometry {
      *  already-swept faces. Check steel reaches the world renderer from pooled runs, copied
      *  crossing wings and manual edits, so the cut has to run on the swept faces as well. */
     public static Mesh cutSteel(Mesh source,List<Steel> steel,Profile p,PointSettings s,double top){
+        return cutSteel(source,steel,p,s,top,List.of());
+    }
+    public static Mesh cutSteel(Mesh source,List<Steel> steel,Profile p,PointSettings s,double top,List<Track> sourceRoads){
+        return cutSteel(source,steel,p,s,top,sourceRoads,true);
+    }
+    /** Incoming closure wings join the running steel; only flange channels may sever them. */
+    public static Mesh cutSteel(Mesh source,List<Steel> steel,Profile p,PointSettings s,double top,List<Track> sourceRoads,boolean trimRunningOverlap){
         if(steel.isEmpty())return source;
-        var channels=new ArrayList<Span>();for(var list:crossingChannels(steel,top,p.railHeight()).values())channels.addAll(list);
-        var rails=crossingRails(steel,top,p.railHeight());
+        var channels=new ArrayList<Span>();var heights=new IdentityHashMap<Span,Double>();
+        for(var group:crossingChannels(steel,top,p.railHeight()).entrySet())for(Span channel:group.getValue()){channels.add(channel);heights.put(channel,group.getKey());}
+        var rails=trimRunningOverlap?crossingRails(steel,top,p.railHeight()):List.<Span>of();
         if(channels.isEmpty()&&rails.isEmpty())return source;
         var railBins=bins(rails);var channelBins=channels.isEmpty()?null:bins(channels);
         Mesh out=new Mesh();
         for(var q:source.quads){
             if(!isCheckSteel(q.part())){out.quad(q);continue;}
             var section=new Mesh();section.quad(q);
-            double low=Double.MAX_VALUE,high=-Double.MAX_VALUE;
-            for(V3 v:List.of(q.a(),q.b(),q.c(),q.d())){low=Math.min(low,v.y());high=Math.max(high,v.y());}
-            Span face=spine(q,layerWidth(q,p,top));
+            Plane level=roadLevel(q.center(),sourceRoads,top);double worldTop=level.height(q.center());
+            Span face=spine(q,layerWidth(q,p,worldTop));
             if(face!=null){
                 for(Span other:nearby(face,railBins))if(other.line!=face.line&&meets(q,face,other)){
+                    if(Math.abs(other.level(0).height(q.center())-worldTop)>p.railHeight())continue;
                     boolean flat=Math.abs(Math.abs(face.normal().dot(other.normal()))-1)<1e-6;
                     if(flat){
                         if(!alongside(face,other))continue;
-                        section=cut(section,other.channel(),false,new Plane(new V3(0,1,0),top),face.a,face.normal().lateral(),p,s,q.part(),top-p.railHeight());
+                        section=cutFace(section,q,other.channel(),level,face.a.add(0,worldTop-top-face.a.y(),0),face.normal().lateral(),p,s,level.d-p.railHeight());
                         continue;
                     }
                     if(!crosses(face,other))continue;
-                    section=clipLayer(section,bisectors(face,other),p,top,top-p.railHeight());
-                    section=clipLayer(section,bisectorsMirror(face,other),p,top,top-p.railHeight());
+                    var first=new ArrayList<>(bisectors(face,other));first.add(new Plane(level.n,level.d-p.railHeight()).reverse());
+                    var second=new ArrayList<>(bisectorsMirror(face,other));second.add(new Plane(level.n,level.d-p.railHeight()).reverse());
+                    section=subtract(section,first,false,level);section=subtract(section,second,false,level);
                 }
-                if(channelBins!=null&&high>top-.055)for(Span channel:nearby(face,channelBins))
-                    if(meets(q,face,channel))
-                        section=cut(section,channel.channel(),false,new Plane(new V3(0,1,0),top),face.a,face.normal().lateral(),p,s,q.part(),top-.055);
+                if(channelBins!=null)for(Span channel:nearby(face,channelBins))
+                    if(meets(q,face,channel)&&Math.abs(channel.level(heights.get(channel)).height(q.center())-worldTop)<=p.railHeight()){
+                        var planes=channelPlanes(channel,heights.get(channel));
+                        section=cutFace(section,q,planes,level,face.a.add(0,worldTop-top-face.a.y(),0),face.normal().lateral(),p,s,level.d-.055);
+                    }
             }
             out.quads.addAll(section.quads);
         }
@@ -413,7 +597,8 @@ public final class DiamondGeometry {
     }
     private static boolean coveredEnd(GuardRails.Run run,double d,GuardRails.Run other){
         V3 point=run.road().at(d).add(run.road().tangent(d).lateral().mul(run.offset()));
-        double near=other.road().nearest(point);if(near<=other.start()+.4||near>=other.end()-.4)return false;
+        double near=TurnoutFrame.nearestOffset(other.road(),point,other.offset());if(near<=other.start()+.4||near>=other.end()-.4)return false;
+        if(Math.abs(run.road().tangent(d).dot(other.road().tangent(near)))<.995)return false;
         V3 target=other.road().at(near).add(other.road().tangent(near).lateral().mul(other.offset()));
         return point.distance(target)<run.profile().headWidth()*.5;
     }
@@ -433,8 +618,11 @@ public final class DiamondGeometry {
             if(windows!=null&&road<windows.length){start=Math.max(0,Math.min(windows[road][0],windows[road][1]));end=Math.min(t.length,Math.max(windows[road][0],windows[road][1]));}
             else if(group!=null){double a=group.intersection(t,group.lo()),b=group.intersection(t,group.hi());start=Math.max(0,Math.min(a,b)-1);end=Math.min(t.length,Math.max(a,b)+1);}
             else{start=Math.max(0,c-extent);end=Math.min(t.length,c+extent);}
-            double guardStart=Math.max(start+.1,c-reach-s.guardLengthDelta()/2+s.guardShift());
-            double guardEnd=Math.min(end-.1,c+reach+s.guardLengthDelta()/2+s.guardShift());
+            // Running-rail ownership may end inside this crossing when a neighbouring turnout
+            // draws that road. Its check rail still belongs to the crossing and needs both mouths.
+            double guardStart=Math.max(Math.max(0,c-extent)+.1,c-reach-s.guardLengthDelta()/2+s.guardShift());
+            double guardEnd=Math.min(Math.min(t.length,c+extent)-.1,c+reach+s.guardLengthDelta()/2+s.guardShift());
+            if(group!=null){guardStart=Math.max(start+.1,c-reach-s.guardLengthDelta()/2+s.guardShift());guardEnd=Math.min(end-.1,c+reach+s.guardLengthDelta()/2+s.guardShift());}
             for(int sign:new int[]{-1,1}){
                 int id=road*4+(sign==1?2:0);
                 rails.addAll(path(t,start,end,sign*p.centerOffset(),0,road,id,sectionWidth,"frog"));
@@ -462,7 +650,11 @@ public final class DiamondGeometry {
                         if(Math.max(a,b)>start&&Math.min(a,b)<end)rails.addAll(path(run,road,id+1,sectionWidth));
                     }
                 }
-                channels.addAll(path(t,start,end,sign*(p.centerOffset()-p.headWidth()/2-gap/2),0,road,id,gap,"channel"));
+                // A neighbouring turnout may own this road before start or after end, but its
+                // wheel flanges still pass through the other roads drawn by this crossing.
+                double channelStart=Math.min(start,Math.max(0,c-extent));
+                double channelEnd=Math.max(end,Math.min(t.length,c+extent));
+                channels.addAll(path(t,channelStart,channelEnd,sign*(p.centerOffset()-p.headWidth()/2-gap/2),0,road,id,gap,"channel"));
             }
         }
         // Roads that only pass over this crossing: their flanges cut this mesh even though this
@@ -487,8 +679,11 @@ public final class DiamondGeometry {
         for(Span rail:rails){
             Mesh section=new Mesh();section.rail(rail.a,rail.b,1,1,p,s,rail.part);
             if(p.detail()==null||p.detail().rails().isEmpty()){
-                // Generic beams have end caps; retain only the exposed ends of each run.
-                for(int i=section.quads.size()-1;i>=0;i--)if((i%6==4&&!rail.first)||(i%6==5&&!rail.last))section.quads.remove(i);
+                // Replace the three overlapping beam ends with the actual I-beam outline.
+                // Only physical run ends get a complete end face; a flange cut keeps its foot.
+                for(int i=section.quads.size()-1;i>=0;i--)if(i%6>=4)section.quads.remove(i);
+                if(rail.first)section.railCutCap(rail.a,rail.b.sub(rail.a),p,s,rail.part,true);
+                if(rail.last)section.railCutCap(rail.b,rail.b.sub(rail.a),p,s,rail.part,false);
             }else{
                 // A native rail model repeats and carries no end faces at all, so an exposed end of a
                 // run is an open section unless its own zMin cross-section is closed here.
@@ -511,6 +706,7 @@ public final class DiamondGeometry {
                 // bounded by the crossing rail's own section instead, never by a wedge.
                 if(other.cutter){
                     if(!isCheckSteel(rail.part))continue;
+                    if(Math.abs(other.level(0).height(rail.a)-level.height(rail.a))>p.railHeight())continue;
                     boolean flat=Math.abs(Math.abs(rail.normal().dot(other.normal()))-1)<1e-6;
                     if(flat){
                         if(!alongside(rail,other))continue;
@@ -522,7 +718,16 @@ public final class DiamondGeometry {
                 V3 a=rail.normal(),b=other.normal();double da=a.dot(rail.a),db=b.dot(other.a);
                 if(!other.cutter&&Math.abs(Math.abs(a.dot(b))-1)<1e-10&&Math.abs(da-db*Math.signum(a.dot(b)))<1e-8){
                     // Equal-distance seams need one owner; subtracting both deletes steel.
-                    if(other.line<rail.line)section=cut(section,other.channel(),false,level,rail.a,direction,p,s,rail.part,level.d-p.railHeight());
+                    if(other.line<rail.line)section=subtract(section,other.channel(),false,level);
+                    continue;
+                }
+                if(!other.cutter){
+                    // Like FrogGeometry.fixedHeart, retain each full I-section on its
+                    // own side of the V bisectors. These are welded internal joins,
+                    // not exposed ends: inserting a fresh whole-section cap here
+                    // creates plates inside the neighbouring rail's web notches.
+                    section=subtract(section,bisectors(rail,other),false,level);
+                    section=subtract(section,bisectorsMirror(rail,other),false,level);
                     continue;
                 }
                 section=cut(section,List.of(other.start,other.end,new Plane(b.sub(a),db-da),new Plane(b.mul(-1).sub(a),-db-da)),false,level,rail.a,direction,p,s,rail.part,level.d-p.railHeight());
@@ -532,9 +737,9 @@ public final class DiamondGeometry {
             // solid; rail feet remain below the wheel flange clearance depth. Only a channel
             // that really crosses this rail at its own running height may remove steel.
             for(var group:channelBins.entrySet()){
-                if(Math.abs(group.getKey()-(p.top()+s.verticalOffset()))>p.railHeight())continue;
                 for(Span channel:nearby(rail,group.getValue()))if(channel.cutter?overlaps(rail,channel):rail.near(channel))
-                    section=cut(section,channel.channel(),true,level,rail.a,direction,p,s,rail.part,level.d-.055);
+                    if(Math.abs(channel.level(group.getKey()).height(rail.a)-level.height(rail.a))<=p.railHeight())
+                        section=cut(section,channelPlanes(channel,group.getKey()),true,level,rail.a,direction,p,s,rail.part,level.d-.055);
             }
             out.quads.addAll(section.quads);
         }
@@ -564,12 +769,16 @@ public final class DiamondGeometry {
             double mouth=flare*Math.max(0,1-Math.min(d-start,end-d)/.35);
             points.add(t.at(d).add(t.tangent(d).lateral().mul(offset-mouth)));
         }
-        return spans(points,road,line,width,part);
+        // Running paths stop at ownership windows or join the crossing/closure
+        // assembly. Only a check rail's free mouth is a physical exposed end.
+        return spans(points,road,line,width,part).stream().map(span->new Span(span.road,span.line,span.a,span.b,span.start,span.end,
+            span.width,span.part,span.first&&isCheckSteel(part),span.last&&isCheckSteel(part),span.cutter)).toList();
     }
     private static List<Span> path(GuardRails.Run run,int road,int line,double width){
         int count=Math.max(2,(int)Math.ceil((run.end()-run.start())/.24));var points=new ArrayList<V3>();
         for(int i=0;i<=count;i++)points.add(run.point(run.start()+(run.end()-run.start())*i/count));
-        return spans(points,road,line,width,"wing");
+        return spans(points,road,line,width,"wing").stream().map(span->new Span(span.road,span.line,span.a,span.b,span.start,span.end,
+            span.width,span.part,span.first&&!run.attachedStart(),span.last&&!run.attachedEnd(),span.cutter)).toList();
     }
     private static List<Span> spans(List<V3> points,int road,int line,double width,String part){
         int count=points.size()-1;var result=new ArrayList<Span>();
@@ -595,7 +804,19 @@ public final class DiamondGeometry {
     }
     /** Subtract a convex prism, keeping disjoint outside pieces and their original UVs. */
     private static Mesh subtract(Mesh source,List<Plane> planes,boolean walls,Plane top){
-        Mesh outside=new Mesh(),inside=source;
+        Mesh outside=new Mesh(),inside=new Mesh();
+        // Do not split a face which is wholly outside any side of the prism.
+        // In particular, rail feet below the flange floor must stay intact.
+        for(var q:source.quads){
+            boolean excluded=false;
+            for(Plane plane:planes){
+                if(plane.n.dot(plane.n)<1e-16)continue;
+                double min=Double.MAX_VALUE;
+                for(V3 v:List.of(q.a(),q.b(),q.c(),q.d()))min=Math.min(min,plane.n.dot(v)-plane.d);
+                if(min>=1e-10){excluded=true;break;}
+            }
+            (excluded?outside:inside).quad(q);
+        }
         for(int i=0;i<planes.size();i++){
             Plane plane=planes.get(i);
             if(plane.n.dot(plane.n)<1e-16){

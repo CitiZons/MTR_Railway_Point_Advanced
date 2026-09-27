@@ -21,18 +21,20 @@ public final class StockRailIntervalRegression{
     private static void check(boolean pass,String why){if(!pass){failures.add(why);System.out.println("FAIL: "+why);}}
 
     public static void run()throws Exception{
+        failures.clear();
         Profile p=Profile.STANDARD.tune(s);
         double top=p.top()+s.verticalOffset(),offset=p.centerOffset();
         var junctions=Detector.find(tracks());
         check(junctions.size()==1&&junctions.get(0).kind()==Junction.Kind.Y,
             "the stock-rail fixture is one Y turnout (found "+junctions.size()+")");
-        if(junctions.isEmpty())return;
+        if(junctions.isEmpty())throw new AssertionError(String.join("\n",failures));
         Junction j=junctions.get(0);
         double extent=PointMesh.extent(j,s);
         check(extent>10,"the stock-rail fixture lost its length: "+extent);
         int rails=0,covered=0;StringBuilder listing=new StringBuilder();
         for(double position:new double[]{0,1}){
             var views=PointRenderer.viewsForTest(junctions,s,Profile.STANDARD);
+            for(var view:views)view.position=position;
             Mesh world=PointRenderer.worldForTest(views);
             for(var view:views){
                 if(view.junction.kind()!=Junction.Kind.Y)continue;
@@ -97,6 +99,7 @@ public final class StockRailIntervalRegression{
         check(noUv==0,"plain join end faces have no texture coordinates: "+noUv+" of "+caps+" section faces, first at "+firstNoUv);
         System.out.print(listing);
         scissorsCatalogue();
+        if(!failures.isEmpty())throw new AssertionError(String.join("\n",failures));
         System.out.println("PASS: "+rails+" physical stock-rail lines keep their steel in pieces no longer than "
             +BREAK+" m ("+covered+" steel samples, preview and world, both blade positions)");
     }

@@ -4,7 +4,8 @@ param(
     [switch]$World,
     [switch]$BaseOnly,
     [switch]$Connector,
-    [switch]$MtrOnly
+    [switch]$MtrOnly,
+    [string]$LayoutWorld = ''
 )
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
@@ -46,6 +47,7 @@ $argsList = [Collections.Generic.List[string]]::new()
 $argsList.Add('-Xmx3G')
 $argsList.Add('-Dmixin.debug.export=true')
 if ($World) { $argsList.Add('-DpointProbeWorld=true') }
+if ($LayoutWorld) { $argsList.Add('-DpointProbeLayout=' + (Resolve-Path -LiteralPath $LayoutWorld).Path) }
 foreach ($arg in $version.arguments.jvm) {
     if ($arg -isnot [string]) { continue }
     foreach ($key in $vars.Keys) { $arg = $arg.Replace(('${'+$key+'}'), [string]$vars[$key]) }

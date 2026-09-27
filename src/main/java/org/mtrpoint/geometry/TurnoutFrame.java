@@ -12,6 +12,21 @@ public final class TurnoutFrame {
         for(double d=0;d<extent;d+=.2){V3 a=j.a().at(d);double b=j.b().nearest(a);if(a.distance(j.b().at(b))>.025)return Math.max(0,last);last=d;}
         return 0;
     }
+    /** End of the genuinely common approach, independent of the planed blade's later start.
+     * A 25 mm blade-placement tolerance is far too large for handing over a stock rail. */
+    public static double stockStart(Track road,Track reference,double limit){
+        double last=0;
+        for(double d=0;d<=limit+.05;d+=.05){
+            double at=Math.min(d,limit);V3 point=road.at(at);double other=reference.nearest(point);
+            if(point.distance(reference.at(other))>1e-6){
+                double lo=last,hi=at;
+                for(int i=0;i<24;i++){double mid=(lo+hi)/2;V3 q=road.at(mid);if(q.distance(reference.at(reference.nearest(q)))>1e-6)hi=mid;else lo=mid;}
+                return lo;
+            }
+            last=at;
+        }
+        return limit;
+    }
     public static V3 blade(Track road,double station,double sign,double offset,double open,double start,double length,PointSettings s){
         double factor=Math.pow(Math.max(0,Math.min(1,1-(station-start)/length)),2);
         return road.at(station).add(road.tangent(station).lateral().mul(sign*(offset-s.throwDistance()*open*factor)));

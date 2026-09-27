@@ -48,11 +48,9 @@ public final class PointClient {
             if(scissors!=null&&junction.kind()!=Junction.Kind.DIAMOND)result=scissors.clip(result,junction);
             // A neighbour that only reaches into the shared region keeps its own steel, but shared
             // flangeways still run over it.
-            else if(shared!=null)result=shared.cutShared(result,settings,profile);
             // Rails that cross this one at the same height cut it even where no junction was made:
             // a crossing rail is pieced or short, and the flangeway has to be clear either way.
-            if(centreRoads==null&&!channels.isEmpty())result=DiamondGeometry.cutChannels(result,channels,profile.tune(settings),settings,profile.tune(settings).top()+settings.verticalOffset(),junction.kind()==Junction.Kind.THREE);
-            return RailSampler.bank(result,junction,scissors==null?junction.tracks():scissors.tracks());
+            return result;
         }
         public Mesh mesh(){
             double visual=Double.isFinite(previewPosition)?previewPosition:position;
@@ -61,6 +59,15 @@ public final class PointClient {
                 left=buildAt(0,boundary);
                 middle=junction.kind()==Junction.Kind.THREE?buildAt(.5,boundary):null;
                 right=junction.kind()!=Junction.Kind.DIAMOND?buildAt(1,boundary):left;
+                var cuttingRoads=new LinkedHashMap<String,Track>();
+                if(scissors==null&&shared!=null)for(Track road:shared.tracks())cuttingRoads.put(road.id,road);
+                if(centreRoads==null)for(Track road:channels)cuttingRoads.put(road.id,road);
+                var frames=middle==null?List.of(left,right):List.of(left,middle,right);
+                frames=DiamondGeometry.cutChannelFrames(frames,List.copyOf(cuttingRoads.values()),profile.tune(settings),settings);
+                var bankingRoads=scissors==null?junction.tracks():scissors.tracks();
+                left=RailSampler.bank(frames.get(0),junction,bankingRoads);
+                right=RailSampler.bank(frames.get(frames.size()-1),junction,bankingRoads);
+                if(middle!=null)middle=RailSampler.bank(frames.get(1),junction,bankingRoads);
                 if(left.quads.size()!=right.quads.size()||middle!=null&&middle.quads.size()!=left.quads.size())throw new IllegalStateException("Animation topology changed for "+junction.id()+" "+junction.kind()+" scissors="+(scissors!=null)+" left="+left.quads.size()+" middle="+(middle==null?0:middle.quads.size())+" right="+right.quads.size()+" channels="+channels.size());
                 var indices=new ArrayList<Integer>();for(int i=0;i<left.quads.size();i++)if(!left.quads.get(i).equals(right.quads.get(i))||middle!=null&&!left.quads.get(i).equals(middle.quads.get(i)))indices.add(i);else if(right!=left)right.quads.set(i,left.quads.get(i));
                 moving=indices.stream().mapToInt(Integer::intValue).toArray();mesh=new Mesh();mesh.quads.addAll(left.quads);lastSettings=settings;lastFrame=-1;builds++;
@@ -94,6 +101,7 @@ public final class PointClient {
         SETTINGS.put(m.id(),new AppearanceData.Entry(AppearanceData.decode(m.json()),m.revision()));message=m.message();
         for(View v:views)if(v.junction.id().equals(m.id()))v.preview(saved(m.id()));
         if(mc.screen instanceof BlueprintScreen screen)screen.acknowledge(m.id(),m.message());
+        else if(mc.screen instanceof PointSelectionScreen screen)screen.acknowledge(m.id(),m.revision(),m.message());
     }
     public static void motion(PointNetwork.Motion m){motion=m;motionReceived=System.currentTimeMillis();movements=index(m.entries());}
     public static void tick(){
@@ -122,8 +130,8 @@ public final class PointClient {
             var v=new View(j,s,profileFor(j,s),stylesFor(j,s));if(old!=null){v.position=old.position;v.target=old.target;}
             if(mc.screen instanceof BlueprintScreen editor&&editor.pointId().equals(j.id())){View existing=previous.get(j.id());if(existing!=null){if(refreshProfiles){existing.left=null;existing.preview(existing.settings);}next.add(existing);continue;}}next.add(v);
         }
-        refreshProfiles=false;views=List.copyOf(next);refreshScissors();
         RailSampler.retain(tracks.stream().map(t->t.id).collect(java.util.stream.Collectors.toSet()));
+        refreshProfiles=false;views=List.copyOf(next);refreshScissors();
     }
     private static void refreshScissors(){
         var junctions=views.stream().filter(v->v.settings.enabled()).map(v->v.junction).toList();
@@ -151,21 +159,24 @@ public final class PointClient {
     /** The native hand-over window of every plain crossing. It is read by the renderer mixin while
      *  MTR draws its own rails, so it is prepared with the view set, not lazily with the mesh. */
     static void refreshCrossings(List<View> views){
+        refreshCrossings(views,RailSampler.tracks());
+    }
+    static void refreshCrossings(List<View> views,List<Track> all){
         var junctions=new ArrayList<Junction>();
         for(View v:views)if(v.settings.enabled())junctions.add(v.junction);
-        List<Track> all=RailSampler.tracks();
         // A crossing next to a turnout shares the road with it. Its window is cut back to where the
         // turnout's own mesh ends, so the steel between them is drawn exactly once and the turnout
         // keeps its blades: a plane clip would also cut the other roads of the same mesh.
         var natural=new HashMap<String,PointMesh.YBoundary>();
-        for(View v:views)if(v.scissors==null&&v.junction.kind()!=Junction.Kind.DIAMOND)natural.put(v.junction.id(),RailSampler.yBoundary(v.junction,v.settings));
+        for(View v:views)if(v.scissors==null&&v.junction.kind()!=Junction.Kind.DIAMOND)natural.put(v.junction.id(),turnoutBoundary(v,views));
         var regions=new ArrayList<Crossings.Region>();
-        for(var region:Crossings.regions(junctions,PointSettings.DEFAULT)){
+        var appearances=new HashMap<String,PointSettings>();for(View v:views)appearances.put(v.junction.id(),v.settings);
+        for(var region:Crossings.regions(junctions,j->appearances.get(j.id()))){
             var windows=new double[region.roads().size()][];boolean changed=false;
             for(int i=0;i<region.roads().size();i++){
                 Track t=region.roads().get(i);double[] w=region.windows().window(i).clone();
                 for(View o:views){
-                    if(o.scissors!=null||o.junction.kind()==Junction.Kind.DIAMOND)continue;
+                    if(!o.settings.enabled()||o.scissors!=null||o.junction.kind()==Junction.Kind.DIAMOND)continue;
                     Junction oj=o.junction;Track road=null;double end=0;
                     if(oj.a().id.equals(t.id)){road=oj.a();end=natural.get(oj.id()).aEnd();}
                     else if(oj.b().id.equals(t.id)){road=oj.b();end=natural.get(oj.id()).bEnd();}
@@ -188,18 +199,22 @@ public final class PointClient {
             Junction j=v.junction;
             if(v.junction.kind()==Junction.Kind.DIAMOND&&v.scissors==null){
                 var region=byJunction.get(j.id());
-                if(region!=null&&!region.owner().id().equals(v.region)){
+                if(region!=null&&(!region.owner().id().equals(v.region)||!region.roads().equals(v.centreRoads)
+                    ||v.diamond==null||!Arrays.deepEquals(region.windows().windows(),v.diamond.windows()))){
                     v.region=region.owner().id();v.diamond=region.windows();
                     v.centreRoads=region.roads();v.centreHidden=!region.owner().id().equals(j.id());
                     v.left=null;v.mesh=null;
                 }
+                if(region==null&&v.region!=null){v.region=null;v.diamond=null;v.centreRoads=null;v.centreHidden=false;v.left=null;v.mesh=null;}
+            }else if(v.centreRoads!=null){
+                v.region=null;v.diamond=null;v.centreRoads=null;v.centreHidden=false;v.left=null;v.mesh=null;
             }else if(v.junction.kind()!=Junction.Kind.DIAMOND&&v.scissors==null&&v.boundary==null){
                 v.boundary=RailSampler.yBoundary(j,v.settings);
             }
             // A crossing rail cuts this steel by its flange channels even when the two are pieced
             // on different views, so the cut set is worked out from the rails, not from the view.
             List<Track> scope=v.scissors!=null?v.scissors.tracks():j.tracks();
-            var cut=Crossings.cutters(scope,v.scissors==null?all:without(all,scope));
+            var cut=Crossings.cutters(scope,v.scissors==null?all:without(all,scope),v.profile.tune(v.settings),v.settings);
             if(!cut.equals(v.channels)){v.channels=cut;v.left=null;v.mesh=null;}
         }
         // A turnout hands the far end of a road over to the crossing or the facing turnout that
@@ -207,25 +222,36 @@ public final class PointClient {
         // the same mesh) is what stops two views drawing the same running rail over each other.
         for(View v:views){
             if(v.scissors!=null||v.junction.kind()==Junction.Kind.DIAMOND)continue;
-            Junction j=v.junction;var b=RailSampler.yBoundary(j,v.settings);
-            var a=window(v,views,j.a());var bb=window(v,views,j.b());
-            var third=j.third()==null?new double[]{0,b.thirdEnd()}:window(v,views,j.third());
-            var capped=b.window(Math.max(b.aStart(),a[0]),Math.max(b.bStart(),bb[0]),Math.max(b.thirdStart(),third[0]))
-                .withEnds(Math.min(b.aEnd(),a[1]),Math.min(b.bEnd(),bb[1]),Math.min(b.thirdEnd(),third[1]));
+            var capped=natural.get(v.junction.id());
             if(!capped.equals(v.boundary)){v.boundary=capped;v.left=null;v.mesh=null;}
         }
     }
-    /** The stretch of a road this view may sweep towards a facing turnout that draws the same road.
-     *  The crossing windows are already cut back from the other side, so only the midpoint of two
-     *  turnouts sharing one rail is decided here. A plane clip would cut every other road of the
-     *  same mesh as well, which is why the window is capped instead. */
+    /** Both meshes use this same hand-over; the complete turnout frog must fit before it. */
+    private static PointMesh.YBoundary turnoutBoundary(View v,List<View> views){
+        Junction j=v.junction;var b=RailSampler.yBoundary(j,v.settings);
+        var a=window(v,views,j.a());var bb=window(v,views,j.b());
+        var third=j.third()==null?new double[]{0,b.thirdEnd()}:window(v,views,j.third());
+        double ae=Math.min(b.aEnd(),a[1]),be=Math.min(b.bEnd(),bb[1]);
+        if(j.kind()==Junction.Kind.Y){var frog=new FrogGeometry(j,v.settings,v.profile.tune(v.settings),PointMesh.extent(j,v.settings));ae=Math.max(ae,frog.heel(0));be=Math.max(be,frog.heel(1));}
+        return b.window(Math.max(b.aStart(),a[0]),Math.max(b.bStart(),bb[0]),Math.max(b.thirdStart(),third[0]))
+            .withEnds(ae,be,Math.min(b.thirdEnd(),third[1]));
+    }
+    /** Decide a station hand-over to the next owner on this road. A short crossing must actually
+     * reach that station; both meshes then use the same seam without clipping unrelated roads. */
     private static double[] window(View v,List<View> views,Track t){
         double own=t.nearest(v.junction.center()),start=0,end=Double.MAX_VALUE;
         for(View o:views){
-            if(o==v||o.scissors!=null)continue;
+            if(o==v||!o.settings.enabled()||o.scissors!=null)continue;
             if(o.drawnRoads().stream().noneMatch(r->r.id.equals(t.id)))continue;
             double other=t.nearest(o.junction.center());
-            if(other<own)start=Math.max(start,(own+other)/2);else if(other>own)end=Math.min(end,(own+other)/2);
+            double seam=(own+other)/2;
+            if(o.junction.kind()==Junction.Kind.DIAMOND){
+                double reach=PointMesh.extent(o.junction,o.settings);double[] range=RailSampler.lastCellRange(t,o.settings,other-reach,other+reach);
+                // A short crossing window may not reach the midpoint at all. Keep the turnout
+                // through the intervening road instead of handing it over to an absent mesh.
+                seam=other>own?Math.max(seam,range[0]):Math.min(seam,range[1]);
+            }
+            if(other<own)start=Math.max(start,seam);else if(other>own)end=Math.min(end,seam);
         }
         return new double[]{start,end};
     }

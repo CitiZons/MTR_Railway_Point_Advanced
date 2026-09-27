@@ -60,12 +60,8 @@ public final class PointRenderer {
             steel.add(new DiamondGeometry.Steel(source.view.mesh(),tuned.top()+source.settings.verticalOffset(),tuned,source.settings,
                 source.view.crossingRoads()));
             for(var original:GuardRails.assembled(source.view.junction,source.settings,source.profile,source.group,
-                source.view.junction.kind()==Junction.Kind.THREE&&!source.settings.guardEdits().isEmpty()?RailSampler.yBoundary(source.view.junction,source.settings):null)){
+                source.view.junction.kind()==Junction.Kind.THREE?RailSampler.yBoundary(source.view.junction,source.settings):null)){
                 GuardRails.Run run=original;
-                if(source.group!=null&&source.view.junction.kind()!=Junction.Kind.DIAMOND){
-                    var group=source.group;boolean before=source.view.junction.center().sub(group.crossing().center()).dot(group.axis())<0;
-                    run=run.clip(group.crossing().center().add(group.axis().mul(before?group.lo():group.hi())),group.axis().mul(before?1:-1));
-                }
                 if(run!=null)runs.add(run);
             }
         }
@@ -81,13 +77,11 @@ public final class PointRenderer {
             Mesh check=new Mesh();
             for(var q:source.view.mesh().quads){
                 if(q.part().equals("sleeper")||q.part().equals("fastener"))supports.quad(q);
-                else if(q.part().equals("wing"))check.quad(q);
+                else if(q.part().equals("wing")&&source.view.junction.kind()!=Junction.Kind.DIAMOND&&q.index()!=-2)check.quad(q);
             }
-            // The wings are cut by every road of the component, including this view's own: a Y
-            // turnout emits its wings from the crossing geometry and never bakes them against its
-            // own flange ways, so the wing really does run into the other route's channel. Only the
-            // head spans of rail, blade and frog faces cut, so a wing never cuts its own copy.
-            supports.quads.addAll(DiamondGeometry.cutSteel(check,cutters,tuned,source.settings,tuned.top()+source.settings.verticalOffset()).quads);
+            // These are incoming closure wings, joined to their route rails. Cutting them by
+            // running-head overlap amputates their knees. Every road's flange channels still cut.
+            supports.quads.addAll(DiamondGeometry.cutSteel(check,cutters,tuned,source.settings,tuned.top()+source.settings.verticalOffset(),source.view.drawnRoads(),false).quads);
         }
         supports.quads.addAll(merged.quads);merged=SurfaceUnion.build(supports);
         return merged;
@@ -120,7 +114,8 @@ public final class PointRenderer {
             if(v.scissors==null)v.shared=ScissorsLayout.reachedBy(groups,j);
             out.add(v);
         }
-        PointClient.refreshCrossings(out);
+        var roads=new LinkedHashMap<String,Track>();for(var j:junctions)for(var road:j.tracks())roads.putIfAbsent(road.id,road);
+        PointClient.refreshCrossings(out,List.copyOf(roads.values()));
         return out;
     }
     public static void preserve(org.mtr.mod.resource.RailResource resource,boolean flip,V3 a,V3 b){

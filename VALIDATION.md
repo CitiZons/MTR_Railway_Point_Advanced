@@ -1,5 +1,82 @@
 # 验证记录
 
+## 2026-09-27：渲染交接端面与内侧灰块（0.1.2）
+
+本轮只修改端面生成与裁切后的补面，不改交点检测、轨道图或尖轨动作。证据目录：`build/endcap-patches-20260927/`，包含修改前、第一项完成后、最终源码快照与本轮差异。
+
+- **交接处错误端面**：取消 Y 固定轨窗口、平交／三开走行轨路径端点的封面；通用固定轨扫掠也不保留分段梁的横向端板。护轨及翼轨的真实自由端仍封口。新回归先复现旧行为（`handover-before.log`），修复后 16 处边界检查和 1,536 个基本轨外缘连续性采样通过（`handover.log`）。
+- **内侧灰块**：旧代码从每个侧面推算整根轨条并重新补全工字形截面，15° 夹具明确复现补面伸出原轨头（X=0.0400359 m，允许半宽 0.034 m，`patches-before.log`）。现仅以轨顶面定位截面，并把补面限制在来源面的平面范围内；采样裁切单元的前后界面不再生成伪端面。原生 OBJ 的开放截面按实际顶点高度／侧面轮廓闭合，不再臆造 36 mm 厚轨头，也不把开放边链误当封闭轮廓。通用、完整原生夹具、实际 MTR 五面模型，15°／30°／60°／90° 共 1,266 个补面点通过（`patches.log`）。
+- **完整验证**：`smokeJar build --offline` 全部通过，4 分 43 秒（`build-final.log`）。原基本轨连续性、翼轨连接、连接杆高度、护轨合并、V 交汇、动画及轮缘槽回归继续通过；生产 JAR 不含测试类、探针或测试模型 JSON。
+- **隔离游戏**：读取 `MTR_test` 的轨道定义和外观数据副本，在全新探针世界绘制，共 33 条轨道、30 份外观。1,286 个平交槽点、6,224 个道岔槽点均无堵塞；1,536 个翼轨连接点与 116 个护轨端部点无缺失，`POINT_SAVED_LAYOUT: PASS`。Connector／BRsignal 组合亦通过 `POINT_WORLD_FINAL: PASS` 与 `POINT_BATCH_SAVE: PASS`。保存布局截图同时保留外露工字形端面供目检。
+
+正式产物：`build/libs/mtr_railway_point_advanced-0.1.2.jar`。未安装到真实客户端、写入用户存档、commit 或 push。隔离绘制使用实际保存轨道及外观，地形和镜头由探针生成，不等于在原存档中开展真实列车运营测试。
+
+## 2026-09-27：基本轨共线交接与交点工字形 V 拼接（0.1.2）
+
+针对新红箭头截图继续修复。前一轮通过的宽范围覆盖检查未能排除这类毫米级台阶，前一轮记录不作为该截图已解决的证据。续作前源码快照为 `build/handover-v-crossings-20260927/before.zip`。
+
+- 基本轨固定部分原先复用尖轨起点的 25 mm 路径分离阈值，在第二条路径已经偏离时仍由第一条路径代画，然后突然切换。新增独立的共线末端定位（距离容差 1 µm），让第二条路径的外侧基本轨从共同引入段末端开始连续绘制，第一条路径在同一处交接；Y 和三开均应用。尖轨起点、削尖、横移和动作公式不变，MTR 原生隐藏仍遵守既有接管窗口，不提前放回原生轨段。
+- 共用交汇构建器对各钢轨完整工字形截面按 V 型角平分界拼接，与固定岔心的处理一致，去掉内部拼接处分配整截面端盖的做法。外露轮缘槽切面由真实截面剪出，不再把轨头边线向下拉成矩形板；斜切封面限制在原钢轨段实际范围内，防止喇叭口斜向截面延伸到别处。
+- 新 `StockApproachRegression` 在轨头外缘内侧 1 mm 直接采样，覆盖 Y／三开、镜像／反向、短／18 m 共线引入段、通用／原生截面、预览／世界网格，共 1,536 点通过。原尖轨动作、削尖和翼轨连续折弯回归继续通过。独立专项日志 `stock.log`，53 秒通过。
+- 新 `VSectionIntersectionRegression` 在修改前明确复现 15° 交点的矩形侧壁填入轨腰空隙（`v-before.log`）。修复后 15°／30°／60°／90°、方向反转、通用／原生截面、预览／最终世界网格的 57,625 个轨腰表面点通过；另有五种交角的轨头覆盖、轮缘槽、工字形端面和截图保存布局连接检查通过。独立专项日志 `v.log`，32 秒通过。
+
+专项入口为 `HandoverVRegression`，使用本轮目录的 `gates.gradle` 和 `-Pgate=stock|v`；两项新检查均纳入完整主回归。本轮生产代码只变更 `TurnoutFrame`、`PointMesh`、`ThreeWayMesh`、`DiamondGeometry`。探针将远节点基本轨机位移近，以便核对小接缝和连接杆高度。
+
+最终结果：
+
+- `gradlew.bat smokeJar build --offline --no-daemon --console=plain` 通过，包含全部回归、编译、重混淆及打包，耗时 4 分 9 秒。日志 `build/handover-v-crossings-20260927/build-final.log`。
+- 同一最终 JAR 在仅 MTR、Connector／Forgified Fabric API／BRsignal／Optional Rail／MTR 两种隔离环境均通过 `POINT_WORLD_FINAL: PASS` 和 `POINT_BATCH_SAVE: PASS`。本轮日志归档为 `runtime-mtr-only.log`、`runtime-connector.log`。
+- 已核对近景 `point-remote-bar-left.png`、独立平交 `point-diamond-close.png`；近景和两动作位置截图归档至本轮目录 `screenshots`。仅 MTR 和 Connector 各自的完整截图仍保存在其隔离运行目录。
+- `git diff --check` 通过，正式 JAR 不含开发探针或回归测试类。源码完成快照 `after.zip`，与日志一起保存在本轮目录。
+
+正式文件为 `build/libs/mtr_railway_point_advanced-0.1.2.jar`。未 commit／push，未替换真实客户端 mods 或加载用户存档。上述验证涵盖复现夹具、保存布局几何和生成游戏场景，尚未在用户这张截图对应的原存档位置实景复验，不将其表述为全部第三方资源包或真实运营验收。
+
+## 2026-09-27：续作四项外观修复（0.1.2）
+
+本轮从引用会话的未完成工作区继续，续作前源码备份为 `build/four-fixes-20260927/before-resume.zip`。不回退已有未提交修改。相对该备份，生产代码只修改 `Mesh`、`PointMesh`、`ThreeWayMesh`、`FrogGeometry`、`GuardRails` 和 `PointSelectionScreen`；没有继续改动平交判定或通用钢轨裁切核心。
+
+1. **外侧基本轨微缝**：相邻采样段共用端点和完整截面法向，包括原生模型顶点。专项检查覆盖 232 处 Y／三开、镜像、通用／原生截面接缝，最大边缘误差 `2.220446049250313E-16 m`。直线／曲线剪式渡线各 32 条轨道侧线、Y 型 16 条预览／世界／动作侧线（4,224 个覆盖点）通过原覆盖检查。日志：`stock.log`，独立进程通过，耗时 24 分 51 秒。
+2. **尖轨后续轨到翼轨的连续折弯**：取消折点后多出的直向第三分支；保留到翼轨的连续折弯，并恢复固定心轨延伸到两侧后跟。恢复原有完整固定心轨截面断言。84 个折弯连续点、无第三分支、两侧后跟覆盖检查通过；用户截图保存布局的 768 个连接点与 3,112 个轮缘槽点通过。日志：`frog.log`，独立进程通过，耗时 1 分 34 秒。
+3. **连接杆降低**：连接杆底面在枕木顶面上方 10 mm、顶面上方 50 mm，原生轨型使用模型中的实际枕木高度。新增测试先在旧实现复现原生模型间隙错误（`rod-before.log`），修复后 12 个 Y／三开、通用／原生、三个动作位置通过，并继续验证坡道动作。日志：`rod.log`，独立进程通过，耗时 2 分 8 秒。
+4. **护轨 UI 合并和两端内收**：UI 允许世界几何并集已经连通、但不能整体重映射到单一路径的部分重叠曲线；保留各源区间，判断端点是否向外继续来消除内部喇叭口，恢复旧合并数据的外端内收。局部重叠、中心线横向相差 50 mm 的部分轨头重叠、反向、镜像、跨轨道 ID 首尾衔接、三段连通通过；9 组夹具共 18 个外端内收在最终网格中保留，无内部喇叭口或重复轨头。不同高度、横向交叉、分离区间及相反侧拒绝合并。6,656 点既有护轨并集和截图复现检查继续通过。日志：`guard.log`，独立进程通过，最终耗时 51 秒；初轮日志保留为 `guard-initial.log`。
+
+上述日志位于 `build/four-fixes-20260927/`。专项入口为 `FourFixRegression`，通过该目录的 `gates.gradle` 和 `-Pgate=stock|frog|rod|guard` 分别运行。新增检查同时接入主回归；修复旧 `StockRailIntervalRegression` 只记录失败但不使进程失败的遗漏。
+
+最终验收结果：
+
+- `gradlew.bat smokeJar build --offline --no-daemon --console=plain`：最终源码编译、重混淆、打包和完整主回归通过，耗时 5 分 45 秒，日志 `build/four-fixes-20260927/build-final.log`。该次包含最后补充的部分轨头重叠用例。前一版完整构建通过的日志保留为 `build-initial.log`。
+- 最终 JAR 分别在仅 MTR 环境和 Connector／Forgified Fabric API／BRsignal／Optional Rail／MTR 组合环境中通过 `POINT_WORLD_FINAL: PASS`；两处外观的服务端保存、回执、编辑器重开核对均通过 `POINT_BATCH_SAVE: PASS`。最终日志复制至 `build/four-fixes-20260927/runtime-mtr-only.log` 和 `runtime-connector.log`，原日志仍在对应 `build/runtime-*-012/stdout.log`。
+- 已核对最终游戏截图 `point-close.png`、`point-asymmetric-wing.png`、`point-asymmetric-three-close.png`，以及连接杆位置截图。截图位于对应隔离运行目录的 `screenshots`。
+- `git diff --check` 通过；正式 JAR 内确认不包含开发探针或回归测试类。源码完成快照为 `build/four-fixes-20260927/after-fixes.zip`。
+
+正式产物：`build/libs/mtr_railway_point_advanced-0.1.2.jar`。专项和游戏测试覆盖列出的夹具、截图保存布局及隔离世界，不等于所有第三方资源包或原存档真实列车运营验收；本次未测试服务端重启后的重新载入。未 commit、push、安装到真实客户端或修改用户存档。
+
+## 2026-09-26：审查发现的五项缺陷修复（0.1.2）
+
+- 长护轨先合并完整区间，再只保留真实外端内弯；未编辑翼轨进入统一合并池，三开视图不再复制未合并翼轨。保存布局审计 `SAVED_GUARDS samples=158 missing=0`、`checked=1202 missing=0`。
+- 端面材质改为 `rail_end.png`，按原生模型或内置工字截面生成并检查截面、材质和 UV；`SCREENSHOT_NATIVE_ENDS`、`CapFaceRegression` 通过。
+- `GeometryTypeEnumerationRegression` 枚举 13 类现实布局：10 类通过分类与有限网格检查（其中 8 类实际生成交汇几何，窄轨并行和立交正确分类为无需平交几何）；梯形道岔组、单/双交分中心、四臂互通明确报告为需要专用开通拓扑。
+
+- 多道岔编辑器现在接收外观回执，按道岔 ID、修订号及本次发送的参数匹配保存结果。成功后继续下一项；权限拒绝、距离限制、版本冲突和超时停止队列并保留草稿。无关广播不再消费当前请求。
+- 交叉判定改为折线段求交，在交点插值检查高度和交角，消除 0.25～1 米采样步长相对 0.08 米容差导致的漏检。输入顺序、轨道反向及小幅平移不改变结果。
+- 平交替换窗口使用真实外观设置；窗口、区域成员或 owner 变化时刷新网格。停用区域会清除旧归属。移出采样范围的轨道在计算新裁切集合前清理。
+- 后处理轮缘槽裁切使用轨道的世界高度平面，包括坡度和外观高差。槽底以下保留轨底；原生截面及通用截面使用同样的高度判断。共面裁切加入浮点容差，使整体移动到不同世界高度时拓扑一致。
+- 动画的各个姿态一起裁切，按来源面与裁切路径配对碎片；缺失碎片只补退化点，不丢弃有效面。静态面复用，转辙时仍插值缓存顶点。封口限定在实际切口内部，通用轨的外露末端使用完整工字截面。
+
+新增 `ReviewFixRegression`、`AppearanceSaveRegression` 并接入主回归。覆盖连续两项保存、拒绝／冲突／超时、交点平移与方向反转、覆盖长度修改及重载、0.24 米轨段被多个通道裁切后的全部有效面、动画中间位置、负高度与坡道、轨底保留，以及带实际外部裁切轨道集合的 View 动画。原 `StockRailIntervalRegression` 现在确实设置两种尖轨位置。
+
+世界网格复现：同一 Y 道岔在 Y=-40、0、64 各检查 644 个轮缘槽点，均无钢轨占用；修复前 Y=-40 为 44/644 点堵塞。此次修复针对已复现代码缺陷，尚不能据此宣布用户原存档全部复杂道岔、第三方轨型或真实列车运营完成验收。已有斜封口朝向的角点投票提示和三开近尖轨重叠候选仍需实景判断，不把这些 NOTE 当作已关闭缺陷。
+
+本次验证结果：
+
+- `gradlew.bat build smokeJar --offline --no-daemon --console=plain`：完整构建和主回归通过，耗时 10 分 19 秒。日志：`build/review-20260926/build-final.log`。
+- 修正旧游戏探针的缩放点击坐标、枕木菜单字段及选择器视口边界后，`gradlew.bat smokeJar --offline --no-daemon --console=plain` 通过。正式 Mod 的源码未因探针坐标调整而改变。
+- `tools/runtime_probe.ps1 -World -MtrOnly`：通过至 `POINT_WORLD_FINAL: PASS`。真实 Forge 网络下两处道岔依次保存，服务端 SavedData 中两项值一致，重新打开编辑器仍一致（`POINT_BATCH_SAVE: PASS`）。同时通过原生普通／存车线截面、三开动画、剪式渡线及 GPU 缓存检查。日志：`build/runtime-mtr-only-012/stdout.log`。
+- `tools/runtime_probe.ps1 -World -Connector`：MTR、BRsignal、Optional Rail、Connector 与 Forgified Fabric API 组合通过至 `POINT_WORLD_FINAL: PASS`，批量保存亦通过。日志：`build/runtime-connector-012/stdout.log`。两种环境的直线／曲线剪式渡线分别通过 863／991 个世界网格轮缘槽采样点检查。
+- `git diff --check` 通过。修改保留在工作区，未执行提交或推送。
+
+游戏探针使用隔离的测试世界，不加载用户存档。服务端数据核对覆盖本次运行的 SavedData 与编辑器重开，尚未覆盖服务器重启后重新载入；测试轨道由探针提供，不等同于真实列车运营验收。正式产物为 `build/libs/mtr_railway_point_advanced-0.1.2.jar`；开发探针 JAR 不用于正式安装。
+
 ## 2026-09-17：最新实景反馈与暂停状态（0.1.2）
 
 用户确认以下情况仍存在钢轨未切断的问题：Y 型单开道岔、部分复杂道岔、平交轨道。应形成辙叉断口或轮缘通道的位置仍可能保留连续钢轨。因此，“钢轨裁切及轮缘通道已在全部道岔／平交布局中修复”不成立，此项仍为未解决问题。
@@ -218,4 +295,4 @@ BRsignal 0.1.2 在不带 Connector 的纯 Forge 测试世界启动时，其现�
 
 本项目只读 MTR 曲线、样式、客户端路径以及 BRsignal 公布的快照。Mixin 只观察 Simulator tick、读取字段、替换轨道外观回调并提交生成网格。没有写入 MTR 图连接、PathData、寻路结果、BR 授权、轨道可视化映射或信号状态。外观参数保存在本 Mod 独立的 `mtrpoint_appearance` SavedData 中。
 
-正式交付文件：`build/libs/mtr_railway_point_advanced-0.1.0.jar`。不要安装 `point-runtime-probe-0.1.0.jar` 到真实游戏。真实客户端 mods 目录和用户存档未修改。
+正式交付文件：`build/libs/mtr_railway_point_advanced-0.1.2.jar`。不要安装 `point-runtime-probe-0.1.2.jar` 到真实游戏。真实客户端 mods 目录和用户存档未修改。

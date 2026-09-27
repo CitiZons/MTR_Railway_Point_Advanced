@@ -23,6 +23,8 @@ public final class FrogGeometry {
     }
     public double toe(int branch){return Math.max(.1,at(branch)-1.45-s.wingLengthDelta()*.4+s.wingShift());}
     public double heel(int branch){return Math.min(extent,at(branch)+tail);}
+    public double knee(int branch){return wing(branch,Math.max(.02,s.flangeway()+s.wingGapDelta())).kneeIncoming;}
+    public double crossingStation(int branch){return at(branch);}
     private double at(int branch){return branch==0?sa:sb;}
     private Track track(int branch){return branch==0?j.a():j.b();}
     private double sign(int branch){return branch==0?side:-side;}
@@ -71,52 +73,20 @@ public final class FrogGeometry {
             if(s.movableFrog())segment(m,branch==0?rootA:rootB,end,1,1,"frog");
             int road=branch;Wing w=wing(road,gap);
             sweep(m,t->inner(road,toe(road)+(w.kneeIncoming-toe(road))*t));
-            // The original wing is retained byte-for-byte until this particular check rail
-            // is edited. Edited wings are emitted by the shared guard assembly instead.
+            // Retain preview geometry, but mark the check-side wing for replacement by the
+            // world interval pool. Its incoming closure and knee extension stay connected.
             if(!editableCheckWings||!s.guardEdits().containsKey(2+road)){
+                int first=m.quads.size();
                 sweep(m,t->wingPoint(1-road,w.kneeOther+(w.endAt-w.kneeOther)*t,gap,0));
                 sweep(m,t->wingPoint(1-road,w.endAt+(w.flareAt-w.endAt)*t,gap,.075*t));
+                V3 mouth=wingPoint(1-road,w.flareAt,gap,.075),before=wingPoint(1-road,w.flareAt-.01,gap,.075);
+                m.railCap(mouth,mouth.sub(before),1,p,s,"wing",false);
+                for(int i=first;i<m.quads.size();i++){
+                    var q=m.quads.get(i);m.quads.set(i,new Mesh.Quad(q.a(),q.b(),q.c(),q.d(),q.surface(),q.part(),-2,q.uv()));
+                }
             }
             guards(m,branch);
         }
-        // The heart rails are clipped at the common bisector. Each working wing has to reach that
-        // same plane, otherwise the running surface keeps a short hollow between the wing knee and
-        // the heart (0.18 m on the standard Y fixture, on both inner rails, at every blade
-        // position). The extension is appended after both branches so the fixed 36-segment
-        // wing layout that the editor and the regressions index into stays untouched.
-        for(int branch=0;branch<2;branch++){
-            Wing w=wing(branch,gap);
-            extendWing(m,branch,w.kneeIncoming,center,forward.lateral());
-        }
-    }
-    /** Continue a working wing from its knee up to the heart's clip plane, keeping its own half. */
-    private void extendWing(Mesh m,int branch,double from,V3 center,V3 plane){
-        double heartSide=inner(branch,heel(branch)).sub(center).dot(plane)>0?1:-1;
-        V3 normal=plane.mul(heartSide);
-        double to=from;
-        for(int i=0;i<32;i++){
-            double value=inner(branch,to).sub(center).dot(normal);
-            V3 lo=inner(branch,Math.max(0,to-.02)),hi=inner(branch,to+.02);
-            double slope=hi.sub(lo).dot(normal)/.04;
-            if(Math.abs(slope)<1e-6)break;
-            double next=clamp(to-value/slope,from,heel(branch));
-            boolean settled=Math.abs(next-to)<1e-9;to=next;if(settled)break;
-        }
-        if(!(to>from+1e-4))return;
-        Mesh extra=new Mesh();
-        int count=Math.max(1,(int)Math.ceil((to-from)/.12));
-        for(int i=0;i<count;i++)extra.rail(inner(branch,from+(to-from)*i/count),inner(branch,from+(to-from)*(i+1)/count),1,1,p,s,"wing");
-        // Trim the extension at the heart's plane. Degenerate slivers (a clipped face that only
-        // touches the plane) carry no surface and would poison sampling consumers, so drop them.
-        Mesh clipped=new Mesh();
-        for(var q:extra.quads)Mesh.clip(clipped,q,center,normal);
-        for(var q:clipped.quads)if(area(q.a(),q.b(),q.c(),q.d())>1e-10)m.quad(q);
-    }
-    private static double area(V3 a,V3 b,V3 c,V3 d){
-        V3 u=b.sub(a),v=c.sub(a),w=d.sub(a);
-        double x1=u.y()*v.z()-u.z()*v.y(),y1=u.z()*v.x()-u.x()*v.z(),z1=u.x()*v.y()-u.y()*v.x();
-        double x2=v.y()*w.z()-v.z()*w.y(),y2=v.z()*w.x()-v.x()*w.z(),z2=v.x()*w.y()-v.y()*w.x();
-        return Math.sqrt(x1*x1+y1*y1+z1*z1)+Math.sqrt(x2*x2+y2*y2+z2*z2);
     }
     private record Wing(double kneeIncoming,double kneeOther,double endAt,double flareAt) {}
     private V3 wingPoint(int other,double d,double gap,double flare){
@@ -148,6 +118,8 @@ public final class FrogGeometry {
         V3 plane=forward.lateral();
         double reach=Math.max(p.footWidth(),p.headWidth())/sine+1;
         for(int branch=0;branch<2;branch++){
+            // The heart owns the heel side of the bisector. The incoming wing is clipped
+            // to the other side, so preserve the whole heart through its actual heel.
             double end=heel(branch),start=Math.max(0,at(branch)-reach);
             V3 keep=inner(branch,end).sub(center).dot(plane)>0?plane.mul(-1):plane;
             int count=Math.max(1,(int)Math.ceil((end-start)/.16));
@@ -172,7 +144,7 @@ public final class FrogGeometry {
     public GuardRails.Run checkWing(int branch){
         int other=1-branch;double gap=Math.max(.02,s.flangeway()+s.wingGapDelta());Wing w=wing(branch,gap);
         double offset=sign(other)*(p.centerOffset()-p.headWidth()-gap);
-        return new GuardRails.Run(track(other),w.kneeOther,w.flareAt,offset,false,true,p,s,"","wing");
+        return new GuardRails.Run(track(other),w.kneeOther,w.flareAt,offset,false,true,p,s,"","wing",true,false);
     }
     private void segment(Mesh m,V3 a,V3 b,double wa,double wb,String part){
         int n=12; // Fixed topology while the heart moves between its two endpoints.

@@ -144,7 +144,7 @@ public final class CapFaceRegression {
         }
         return result;
     }
-    private static boolean hasMaterial(Mesh.Quad q){return q.surface()!=null&&q.surface().texture()!=null&&!q.surface().texture().isBlank();}
+    private static boolean hasMaterial(Mesh.Quad q){return Profile.END_STEEL.equals(q.surface())&&q.uv()!=null&&new HashSet<>(q.uv()).size()>1;}
     private static V3 cross(V3 a,V3 b){return new V3(a.y()*b.z()-a.z()*b.y(),a.z()*b.x()-a.x()*b.z(),a.x()*b.y()-a.y()*b.x());}
     private static double round(double v){return Math.round(v*1e4)/1e4D;}
     private static String round(V3 v){return "("+round(v.x())+","+round(v.y())+","+round(v.z())+")";}
