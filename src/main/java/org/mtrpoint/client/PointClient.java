@@ -91,8 +91,18 @@ public final class PointClient {
     private static Map<String,List<PointNetwork.Movement>> movements=Map.of();
     private static PointNetwork.Motion motion;private static long motionReceived;
     private static int ticks;private static Object level;private static long signature;private static boolean refreshProfiles;
+    private static int serverFeatures;private static int serverModelFormat=-1;private static boolean handshakeComplete;
     public static String message="";
-    public static void clear(){views=List.of();SETTINGS.clear();motion=null;signature=0;Profiles.clear();RailSampler.clear();BY_RAIL.clear();groupJunctions=List.of();groupsById=Map.of();movements=Map.of();PointRenderer.clear();}
+    public static void clear(){views=List.of();SETTINGS.clear();motion=null;signature=0;serverFeatures=0;serverModelFormat=-1;handshakeComplete=false;Profiles.clear();RailSampler.clear();BY_RAIL.clear();groupJunctions=List.of();groupsById=Map.of();movements=Map.of();PointRenderer.clear();}
+    public static void handshake(PointNetwork.Handshake m){
+        serverFeatures=m.features();serverModelFormat=m.modelFormat();
+        handshakeComplete=m.protocol()==PointNetwork.PROTOCOL_VERSION&&serverModelFormat>=0&&serverModelFormat<=PointNetwork.MODEL_FORMAT_VERSION;
+        int clientFeatures=PointNetwork.FEATURE_ENTITY_RAIL|PointNetwork.FEATURE_END_FACE|PointNetwork.FEATURE_SLEEPER_MODEL|PointNetwork.FEATURE_DETAIL_LEVELS;
+        PointNetwork.sendHandshakeAck(new PointNetwork.HandshakeAck(PointNetwork.PROTOCOL_VERSION,clientFeatures,PointNetwork.MODEL_FORMAT_VERSION));
+        if(!handshakeComplete)PointMod.LOG.warn("MTR point handshake mismatch: server protocol={}, modelFormat={}",m.protocol(),m.modelFormat());
+    }
+    public static boolean handshakeComplete(){return handshakeComplete;}
+    public static int serverFeatures(){return serverFeatures;}
     public static long revision(String id){return SETTINGS.getOrDefault(id,new AppearanceData.Entry(PointSettings.DEFAULT,0)).revision();}
     public static PointSettings saved(String id){return SETTINGS.getOrDefault(id,new AppearanceData.Entry(PointSettings.DEFAULT,0)).value();}
     public static void receive(PointNetwork.State m){
