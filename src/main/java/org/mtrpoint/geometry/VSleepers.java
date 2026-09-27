@@ -27,9 +27,9 @@ public final class VSleepers {
             double d=station(next.road,joint,next.distance,angle);
             arms.set(i,new Arm(next.road,d,next.road.at(d),rotate(next.road.tangent(d).lateral(),angle)));joints.add(joint);
         }
-        var seats=new ArrayList<V3>();
+        var seats=new FittingSeats();
         for(int i=0;i<arms.size();i++){
-            Arm a=arms.get(i);double half=p.centerOffset()+s.sleeperOverhang();
+            Arm a=arms.get(i);double half=p.centerOffset()+p.sleeperOverhang(s);
             V3 left=i==0?null:joints.get(i-1),right=i+1==arms.size()?null:joints.get(i);
             double d=a.distance;V3 c=a.center,n=a.normal;
             double lo=-half,hi=half;
@@ -45,9 +45,10 @@ public final class VSleepers {
             out.quads.addAll(arm.quads);
             if(p.detail()!=null)for(int sign:new int[]{-1,1}){
                 V3 seat=a.road.at(d).add(a.road.tangent(d).lateral().mul(sign*p.centerOffset()));
-                if(seats.stream().noneMatch(v->v.distance(seat)<.18)){seats.add(seat);p.detail().fitting(out,seat,n,s,p,index);}
+                seats.add(seat,a.road.tangent(d).lateral(),i==0&&sign<0||i==arms.size()-1&&sign>0);
             }
         }
+        seats.emit(out,p,s,index);
     }
     public static void diamond(Mesh out,Junction j,PointSettings s,Profile p,double extent){
         Track a=j.a(),b=j.b();double ca=j.sa(),cb=j.sb();
@@ -79,10 +80,10 @@ public final class VSleepers {
         V3 separation=b.sub(a);
         if(separation.length()<1e-7)separation=j.b().at(Math.min(j.b().length,otherDistance+3)).sub(j.a().at(Math.min(j.a().length,d+3)));
         V3 cut=na.add(nb).unit();if(cut.dot(separation)<0)cut=cut.mul(-1);
-        var seats=new ArrayList<V3>();
+        var seats=new FittingSeats();double stockSide=TurnoutFrame.side(j,extent);
         for(int branch=0;branch<2;branch++){
             V3 c=branch==0?a:b,n=branch==0?na:nb;Track road=branch==0?j.a():j.b();
-            double half=p.centerOffset()+s.sleeperOverhang(),join=joint.sub(c).dot(n);
+            double half=p.centerOffset()+p.sleeperOverhang(s),join=joint.sub(c).dot(n);
             double lo=SleeperEdits.split(s,index)?-half:Math.min(-half,join-.4),hi=SleeperEdits.split(s,index)?half:Math.max(half,join+.4);
             Mesh arm=new Mesh();
             if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(arm,c,n,lo,hi,s,p,index);}
@@ -93,9 +94,10 @@ public final class VSleepers {
                 double near=branch==0?d:otherDistance;
                 for(int i=0;i<5;i++){V3 seat=road.at(near).add(road.tangent(near).lateral().mul(sign*p.centerOffset()));double denom=road.tangent(near).dot(forward);if(Math.abs(denom)<.1)break;near=Math.max(0,Math.min(road.length,near-seat.sub(c).dot(forward)/denom));}
                 V3 seat=road.at(near).add(road.tangent(near).lateral().mul(sign*p.centerOffset()));
-                if(p.detail()!=null&&seats.stream().noneMatch(v->v.distance(seat)<.18)){seats.add(seat);p.detail().fitting(out,seat,n,s,p,index);}
+                if(p.detail()!=null)seats.add(seat,road.tangent(near).lateral(),sign==(branch==0?-stockSide:stockSide));
             }
         }
+        seats.emit(out,p,s,index);
     }
     public static double station(Track road,V3 joint,double initial,double angle){
         double d=Math.max(0,Math.min(road.length,initial));

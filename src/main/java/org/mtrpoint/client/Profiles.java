@@ -15,9 +15,22 @@ public final class Profiles {
     public record Adapted(Profile profile,boolean track,String note) {}
     private static final Map<String,Adapted> CACHE=new HashMap<>();
     private static final Map<String,List<Mesh.Quad>> ATTACHMENTS=new HashMap<>();
-    public static List<Mesh.Quad> attachments(String id){get(id);return ATTACHMENTS.getOrDefault(id,List.of());}
-    public static void clear(){CACHE.clear();ATTACHMENTS.clear();}
-    public static Adapted get(String id){return CACHE.computeIfAbsent(id,Profiles::load);}
+    private static final Map<String,ProfileModel> MODELS=new HashMap<>();
+    private static final Map<String,String> ALIASES=new HashMap<>();
+    public static String canonical(String id){String bare=RailResource.getIdWithoutDirection(id);if(!bare.contains(":"))return bare;
+        return ALIASES.computeIfAbsent(bare,key->{RailResource[] found={null};CustomResourceLoader.getRailById(key,r->found[0]=r);if(found[0]!=null)return key;String legacy=key.substring(key.indexOf(':')+1);CustomResourceLoader.getRailById(legacy,r->found[0]=r);return found[0]==null?key:legacy;});}
+    public static ProfileModel model(String id){id=canonical(id);get(id);return MODELS.get(id);}
+    public static List<Mesh.Quad> attachments(String id){id=canonical(id);get(id);return ATTACHMENTS.getOrDefault(id,List.of());}
+    public static void clear(){CACHE.clear();ALIASES.clear();ATTACHMENTS.clear();MODELS.clear();RailLod.clear();SleeperSeams.clear();RailSampler.clearModels();}
+    public static Adapted get(String id){return CACHE.computeIfAbsent(canonical(id),Profiles::load);}
+    public static Profile choose(Collection<String> styles,String forced){
+        if(!forced.isBlank()){var selected=get(forced);if(selected.track&&selected.profile!=null)return selected.profile;}
+        Profile best=null;int priority=-1;
+        for(String raw:styles){String id=canonical(raw);var option=get(id);if(!option.track||option.profile==null)continue;
+            int rank=MODELS.containsKey(id)?2:Set.of("default","default_3d","default_3d_siding").contains(id)?0:1;
+            if(rank>priority){priority=rank;best=option.profile;}}
+        return best==null?new Profile(1.435,.264,.068,.14,.165,Profile.STEEL,Profile.TIMBER,"unmapped",false):best;
+    }
     public static Profile forced(String style){Adapted a=get(style);return a.profile!=null?a.profile:new Profile(1.435,.26428,.068,.14,.165,Profile.STEEL,Profile.TIMBER,style,false);}
     private static Adapted load(String id){
         if(id.equals("default"))return new Adapted(Profile.STANDARD,true,"mtrpoint.profile_native");
@@ -28,12 +41,20 @@ public final class Profiles {
             // Explicit profile descriptors can refine/override inference without depending on a particular pack.
             for(var entry:Minecraft.getInstance().getResourceManager().listResources("rail_profiles",p->p.getPath().endsWith(".json")).entrySet()){
                 try(var reader=entry.getValue().openAsReader()){
-                    JsonObject o=JsonParser.parseReader(reader).getAsJsonObject();if(!o.has("style")||!o.get("style").getAsString().equals(id))continue;
+                    JsonObject o=JsonParser.parseReader(reader).getAsJsonObject();if(!o.has("style")||!canonical(o.get("style").getAsString()).equals(id))continue;
                     if(o.has("track")&&!o.get("track").getAsBoolean())return new Adapted(null,false,"mtrpoint.profile_attachment");
                     var steel=o.has("steelTexture")?new Profile.Surface(o.get("steelTexture").getAsString(),0,0,1,1,-1):Profile.STEEL;
                     var sleeper=o.has("sleeperTexture")?new Profile.Surface(o.get("sleeperTexture").getAsString(),0,0,1,1,-1):Profile.TIMBER;
-                    return new Adapted(new Profile(number(o,"gauge",1.435),number(o,"top",.26428),number(o,"headWidth",.068),number(o,"footWidth",.14),number(o,"railHeight",.165),steel,sleeper,id,true),true,"mtrpoint.profile_descriptor");
-                }
+                    ProfileModel adapted=o.has("modelGroups")?ProfileModel.read(o,model,access.point$texture(),access.point$flipV(),Profiles::read):null;
+                    if(adapted!=null){
+                        try{adapted=RailLod.register(id,r,adapted,o,Profiles::read);}catch(Exception ex){org.mtrpoint.PointMod.LOG.warn("Ignoring invalid LOD for {}",id,ex);}
+                        var texturesToCheck=new HashSet<String>();
+                        for(var q:adapted.fixed())texturesToCheck.add(q.surface().texture());for(var q:adapted.supports())texturesToCheck.add(q.surface().texture());
+                        for(String textureId:texturesToCheck)if(!exists(textureId))throw new IOException("Missing model texture: "+textureId);
+                        MODELS.put(id,adapted);ATTACHMENTS.put(id,adapted.attachments());
+                    }
+                    return new Adapted(new Profile(number(o,"gauge",1.435),number(o,"top",.26428)+r.getModelYOffset(),number(o,"headWidth",.068),number(o,"footWidth",.14),number(o,"railHeight",.165),steel,sleeper,id,true,adapted==null?null:adapted.detail()),true,"mtrpoint.profile_descriptor");
+                }catch(Exception ex){org.mtrpoint.PointMod.LOG.warn("Skipping invalid rail profile {}",entry.getKey(),ex);}
             }
             String content=read(model);var vertices=new ArrayList<V3>();var uv=new ArrayList<float[]>();var faces=new ArrayList<int[]>();
             var materialFaces=new ArrayList<String>();Map<String,String> textures=new HashMap<>();String material="";

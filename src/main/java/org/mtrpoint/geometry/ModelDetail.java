@@ -6,8 +6,16 @@ import java.util.function.Function;
 /** Faces read from the active MTR model, with original per-vertex texture coordinates. */
 public record ModelDetail(List<Mesh.Quad> rails,List<Mesh.Quad> bearers,List<Mesh.Quad> fittings,
                           double railCenter,double railTop,double headWidth,double zMin,double zMax,
-                          double halfBearer,double bearerTop,boolean siding) {
-    public ModelDetail {rails=List.copyOf(rails);bearers=List.copyOf(bearers);fittings=List.copyOf(fittings);}
+                          double halfBearer,double bearerTop,boolean siding,boolean nativeAtlas,Profile.Surface endSteel,
+                          List<List<Mesh.Quad>> fittingLods) {
+    public ModelDetail(List<Mesh.Quad> rails,List<Mesh.Quad> bearers,List<Mesh.Quad> fittings,double railCenter,double railTop,double headWidth,double zMin,double zMax,double halfBearer,double bearerTop,boolean siding,boolean nativeAtlas,Profile.Surface endSteel){
+        this(rails,bearers,fittings,railCenter,railTop,headWidth,zMin,zMax,halfBearer,bearerTop,siding,nativeAtlas,endSteel,List.of());
+    }
+    public ModelDetail(List<Mesh.Quad> rails,List<Mesh.Quad> bearers,List<Mesh.Quad> fittings,double railCenter,double railTop,double headWidth,double zMin,double zMax,double halfBearer,double bearerTop,boolean siding){
+        this(rails,bearers,fittings,railCenter,railTop,headWidth,zMin,zMax,halfBearer,bearerTop,siding,true,Profile.END_STEEL);
+    }
+    public ModelDetail {if(endSteel==null){endSteel=Profile.END_STEEL;nativeAtlas=true;}rails=List.copyOf(rails);bearers=List.copyOf(bearers);fittings=List.copyOf(fittings);fittingLods=fittingLods==null?List.of():fittingLods.stream().map(List::copyOf).toList();}
+    public ModelDetail withFittingLods(List<List<Mesh.Quad>> levels){return new ModelDetail(rails,bearers,fittings,railCenter,railTop,headWidth,zMin,zMax,halfBearer,bearerTop,siding,nativeAtlas,endSteel,levels);}
     public void rail(Mesh mesh,V3 a,V3 b,double taperA,double taperB,Profile p,PointSettings s,String part){
         V3 n=b.sub(a).lateral();double width=p.headWidth()/headWidth;
         for(var face:rails)emit(mesh,face,v->{double t=(v.z()-zMin)/(zMax-zMin),taper=taperA+(taperB-taperA)*t;
@@ -17,7 +25,7 @@ public record ModelDetail(List<Mesh.Quad> rails,List<Mesh.Quad> bearers,List<Mes
         V3 along=new V3(n.z(),0,-n.x());double top=p.top()-railTop+bearerTop+s.verticalOffset();
         for(var original:bearers){
             var face=original;
-            if(original.uv()!=null&&Math.abs(original.a().y()-bearerTop)<.001&&Math.abs(original.c().y()-bearerTop)<.001){
+            if(nativeAtlas&&original.uv()!=null&&Math.abs(original.a().y()-bearerTop)<.001&&Math.abs(original.c().y()-bearerTop)<.001){
                 // The centre of the concrete atlas is clean: do not stretch baked rail-seat shadows.
                 float min=Float.MAX_VALUE,max=-Float.MAX_VALUE;for(int i=0;i<8;i+=2){min=Math.min(min,original.uv().get(i));max=Math.max(max,original.uv().get(i));}
                 var uv=new ArrayList<>(original.uv());for(int i=0;i<8;i+=2)uv.set(i,(min+max)/2+(uv.get(i)-(min+max)/2)*.18F);
@@ -29,8 +37,9 @@ public record ModelDetail(List<Mesh.Quad> rails,List<Mesh.Quad> bearers,List<Mes
     }
     public void fitting(Mesh mesh,V3 center,V3 n,PointSettings s,Profile p,int index){
         V3 along=new V3(n.z(),0,-n.x());
-        for(var face:fittings)emit(mesh,face,v->center.add(n.mul(v.x()-railCenter)).add(along.mul(v.z()))
-                .add(0,v.y()-railTop+p.top()+s.verticalOffset(),0),siding?"sleeper":"fastener",index);
+        Function<V3,V3> transform=v->center.add(n.mul(v.x()-railCenter)).add(along.mul(v.z())).add(0,v.y()-railTop+p.top()+s.verticalOffset(),0);
+        for(var face:fittings)emit(mesh,face,transform,siding?"sleeper":fittingLods.isEmpty()?"fastener":"fastener_near",index);
+        for(int level=0;level<fittingLods.size();level++)for(var face:fittingLods.get(level))emit(mesh,face,transform,level==0?"fastener_mid":"fastener_far",index);
     }
     private static void emit(Mesh mesh,Mesh.Quad q,Function<V3,V3> transform,String part,int index){
         // Mapping model X to the left of the track reverses handedness.

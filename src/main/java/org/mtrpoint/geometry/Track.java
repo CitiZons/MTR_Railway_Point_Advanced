@@ -33,15 +33,16 @@ public final class Track {
         for(int i=start-1;i<end;i++){V3 p=points.get(i);x0=Math.min(x0,p.x());y0=Math.min(y0,p.y());z0=Math.min(z0,p.z());x1=Math.max(x1,p.x());y1=Math.max(y1,p.y());z1=Math.max(z1,p.z());}
         int mid=(start+end)/2;return new Node(start,end,x0,y0,z0,x1,y1,z1,end-start>8?tree(start,mid):null,end-start>8?tree(mid,end):null);
     }
-    private static double bound(Node n,V3 p){double x=Math.max(0,Math.max(n.x0-p.x(),p.x()-n.x1)),y=Math.max(0,Math.max(n.y0-p.y(),p.y()-n.y1)),z=Math.max(0,Math.max(n.z0-p.z(),p.z()-n.z1));return x*x+y*y+z*z;}
-    public double nearest(V3 p){double[] best={Double.MAX_VALUE,0};nearest(tree,p,best);return best[1];}
-    private void nearest(Node n,V3 p,double[] best){
-        if(bound(n,p)>best[0])return;
-        if(n.left!=null){Node first=bound(n.left,p)<=bound(n.right,p)?n.left:n.right;nearest(first,p,best);nearest(first==n.left?n.right:n.left,p,best);return;}
+    private static double bound(Node n,V3 p,boolean horizontal){double x=Math.max(0,Math.max(n.x0-p.x(),p.x()-n.x1)),y=horizontal?0:Math.max(0,Math.max(n.y0-p.y(),p.y()-n.y1)),z=Math.max(0,Math.max(n.z0-p.z(),p.z()-n.z1));return x*x+y*y+z*z;}
+    public double nearest(V3 p){double[] best={Double.MAX_VALUE,0};nearest(tree,p,best,false);return best[1];}
+    public double nearestHorizontal(V3 p){double[] best={Double.MAX_VALUE,0};nearest(tree,p,best,true);return best[1];}
+    private void nearest(Node n,V3 p,double[] best,boolean horizontal){
+        if(bound(n,p,horizontal)>best[0])return;
+        if(n.left!=null){Node first=bound(n.left,p,horizontal)<=bound(n.right,p,horizontal)?n.left:n.right;nearest(first,p,best,horizontal);nearest(first==n.left?n.right:n.left,p,best,horizontal);return;}
         for(int i=n.start;i<n.end;i++){
-            V3 a=points.get(i-1),b=points.get(i);double x=b.x()-a.x(),y=b.y()-a.y(),z=b.z()-a.z();
+            V3 a=points.get(i-1),b=points.get(i);double x=b.x()-a.x(),y=horizontal?0:b.y()-a.y(),z=b.z()-a.z();
             double t=Math.max(0,Math.min(1,((p.x()-a.x())*x+(p.y()-a.y())*y+(p.z()-a.z())*z)/Math.max(1e-12,x*x+y*y+z*z)));
-            double dx=p.x()-a.x()-x*t,dy=p.y()-a.y()-y*t,dz=p.z()-a.z()-z*t,dist=dx*dx+dy*dy+dz*dz;
+            double dx=p.x()-a.x()-x*t,dy=horizontal?0:p.y()-a.y()-y*t,dz=p.z()-a.z()-z*t,dist=dx*dx+dy*dy+dz*dz;
             if(dist<best[0]){best[0]=dist;best[1]=distance[i-1]+t*(distance[i]-distance[i-1]);}
         }
     }

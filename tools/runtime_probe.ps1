@@ -5,11 +5,22 @@ param(
     [switch]$BaseOnly,
     [switch]$Connector,
     [switch]$MtrOnly,
-    [string]$LayoutWorld = ''
+    [string]$LayoutWorld = '',
+    [switch]$RailPack,
+    [string]$RailPackZip = ''
 )
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
-$probeName = if ($MtrOnly) { 'runtime-mtr-only-012' } elseif ($BaseOnly) { 'runtime-base-012' } elseif ($Connector) { 'runtime-connector-012' } else { 'runtime-probe-012' }
+if ($RailPack) {
+    if (!$RailPackZip) {
+        $RailPackZip = @("$project/../resourcepacks/Citizons_Railway.zip", "$project/../MTR_Citizons_Railway/dist/Citizons_Railway.zip") |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    }
+    if (!$RailPackZip -or !(Test-Path -LiteralPath $RailPackZip -PathType Leaf)) {
+        throw 'Citizons Railway ZIP not found. Supply -RailPackZip or clone the sibling MTR_Citizons_Railway repository.'
+    }
+}
+$probeName = if ($RailPack) { if ($MtrOnly) { 'runtime-pack-mtr-only-012' } else { 'runtime-pack-012' } } elseif ($MtrOnly) { 'runtime-mtr-only-012' } elseif ($BaseOnly) { 'runtime-base-012' } elseif ($Connector) { 'runtime-connector-012' } else { 'runtime-probe-012' }
 $game = Join-Path $project "build/$probeName"
 $null = New-Item -ItemType Directory -Force "$game/mods"
 if (!$MtrOnly) { Copy-Item -LiteralPath "$project/../MTR_Optional_Rail_addon/build/libs/mtr_optional_rail_addon-0.1.0.jar" -Destination "$game/mods" -Force }
@@ -47,6 +58,7 @@ $argsList = [Collections.Generic.List[string]]::new()
 $argsList.Add('-Xmx3G')
 $argsList.Add('-Dmixin.debug.export=true')
 if ($World) { $argsList.Add('-DpointProbeWorld=true') }
+if ($RailPack) { $argsList.Add('-DpointProbePack=true'); if (!$World) { $argsList.Add('-DpointProbeWorld=true') } }
 if ($LayoutWorld) { $argsList.Add('-DpointProbeLayout=' + (Resolve-Path -LiteralPath $LayoutWorld).Path) }
 foreach ($arg in $version.arguments.jvm) {
     if ($arg -isnot [string]) { continue }
@@ -58,6 +70,11 @@ $argsList.Add($version.mainClass)
 $utf8 = [Text.UTF8Encoding]::new($false)
 [IO.File]::WriteAllLines("$game/java.args", @($argsList | ForEach-Object { '"' + $_.Replace('\','/').Replace('"','\"') + '"' }), $utf8)
 [IO.File]::WriteAllText("$game/options.txt", "lang:zh_cn`nguiScale:2`nrenderDistance:4`npauseOnLostFocus:false`n", $utf8)
+if ($RailPack) {
+    $null = New-Item -ItemType Directory -Force "$game/resourcepacks"
+    Copy-Item -LiteralPath $RailPackZip -Destination "$game/resourcepacks/Citizons_Railway.zip" -Force
+    [IO.File]::AppendAllText("$game/options.txt", 'resourcePacks:["vanilla","mod_resources","file/Citizons_Railway.zip"]' + "`n", $utf8)
+}
 $process = Start-Process -FilePath $Java -ArgumentList ('@"'+"$game/java.args"+'"') -WorkingDirectory $game -WindowStyle Hidden -RedirectStandardOutput "$game/stdout.log" -RedirectStandardError "$game/stderr.log" -PassThru
 Write-Output "Runtime probe PID: $($process.Id)"
 Write-Output "Logs: $game"

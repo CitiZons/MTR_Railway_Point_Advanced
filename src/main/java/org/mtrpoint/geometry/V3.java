@@ -1,6 +1,7 @@
 package org.mtrpoint.geometry;
 
 public record V3(double x, double y, double z) {
+    public static final V3 ZERO=new V3(0,0,0);
     public V3 add(V3 b) { return new V3(x+b.x,y+b.y,z+b.z); }
     public V3 add(double a,double b,double c) { return new V3(x+a,y+b,z+c); }
     public V3 sub(V3 b) { return new V3(x-b.x,y-b.y,z-b.z); }

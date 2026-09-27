@@ -75,7 +75,7 @@ public final class Mesh {
             CAP_FACES+=triangulateCount(loop);
             var shape=new ArrayList<V3>(loop.size());
             for(V3 v:loop)shape.add(new V3((v.x()-detail.railCenter())*width*taper,v.y()-detail.railTop()+p.top()+s.verticalOffset(),0));
-            cap(center,normal,shape,Profile.END_STEEL,part,start);
+            cap(center,normal,shape,detail.endSteel(),part,start);
         }
     }
     private static long triangulateCount(List<V3> loop){

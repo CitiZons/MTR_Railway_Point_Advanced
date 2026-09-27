@@ -144,7 +144,7 @@ public record ScissorsLayout(Junction crossing,List<Junction> turnouts,List<Trac
                 double d=road.nearest(center);
                 for(int k=0;k<6;k++){V3 seat=road.at(d).add(road.tangent(d).lateral().mul(sign*p.centerOffset()));double den=road.tangent(d).dot(forward);if(Math.abs(den)<.1)break;d=Math.max(0,Math.min(road.length,d-seat.sub(center).dot(forward)/den));}
                 V3 seat=road.at(d).add(road.tangent(d).lateral().mul(sign*p.centerOffset()));if(seats.stream().noneMatch(v->v.distance(seat)<.18))seats.add(seat);
-                double side=seat.sub(center).dot(n);min=Math.min(min,side-settings.sleeperOverhang());max=Math.max(max,side+settings.sleeperOverhang());
+                double side=seat.sub(center).dot(n);min=Math.min(min,side-p.sleeperOverhang(settings));max=Math.max(max,side+p.sleeperOverhang(settings));
             }
             if(settings.sleeperMode()==4){
                 VSleepers.across(mesh,tracks,center,axis,angle,settings,p,index);

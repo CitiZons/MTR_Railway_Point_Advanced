@@ -110,7 +110,7 @@ public final class PointSelectionScreen extends Screen implements TurnoutPanel.H
         Mesh next=new Mesh();var picks=new ArrayList<SleeperPick>();var guardPicks=new ArrayList<GuardPick>();var pool=new ArrayList<GuardRails.Run>();var poolOwners=new ArrayList<Set<Integer>>();
         for(int point=0;point<points.size();point++){var view=points.get(point);int base=(point+1)*1024;
             var settings=drafts.get(view);
-            for(var q:view.mesh().quads)if(!q.part().equals("sleeper")&&!q.part().equals("fastener")
+            for(var q:view.mesh().quads)if(!q.part().equals("sleeper")&&!q.part().startsWith("fastener")
                 &&!q.part().equals("guard"))next.quad(q);
             for(var handle:SleeperHandles.collect(view.mesh())){int global=base+handle.index();var faces=new ArrayList<Mesh.Quad>();
                 for(var face:handle.faces()){var mapped=new Mesh.Quad(face.a(),face.b(),face.c(),face.d(),face.surface(),face.part(),global,face.uv());next.quad(mapped);faces.add(mapped);}

@@ -13,4 +13,7 @@ public record Profile(double gauge,double top,double headWidth,double footWidth,
             s.headWidthOverride()>0?s.headWidthOverride():headWidth,footWidth,railHeight,steel,sleeper,source,automatic,detail);
     }
     public double centerOffset(){return (gauge+headWidth)/2;}
+    public double sleeperOverhang(PointSettings s){
+        return s.sleeperOverhang()+(detail!=null&&!detail.nativeAtlas()?detail.halfBearer()-detail.railCenter()-PointSettings.DEFAULT.sleeperOverhang():0);
+    }
 }

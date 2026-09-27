@@ -1,5 +1,16 @@
 # 验证记录
 
+## 2026-09-28：Citizons Railway 资源模型、连续轨面与距离细节（0.1.2）
+
+- OBJ 分组读取保留钢轨、轨枕、扣件和道砟的模型材质及 UV；普通轨道和道岔使用同一截面。共享端点扫掠修复坡度／倾角渐变断口，并处理 MTR 双圆弧重复相位重启。资源包道砟最大厚度为 0.35 m，与轨层共用倾斜轴。
+- 样式 ID 别名统一解析；端点枕木留量和局部间距调整同步移动扣件。外侧基本轨承座优先于邻近内轨去重，每个扣件按自身钢轨切线定向。`STOCK_FITTINGS` 覆盖镜像和交换分支，共 128 个承座，最大定位误差 `7.616489811865217E-8 m`。
+- 距离档位为 4 m / 12 m，普通支承和道岔扣件均在真实渲染中触发三档。静止 33 帧内自定义几何重建和 PointGpu 上传均为 0；这不是对比 FPS 测试。
+- `build/stock-fitting-build.log`：完整构建与主回归通过（3 分 30 秒）。`build/stock-fitting-photo-build.log`：补充俯视机位的探针构建通过（26 秒）。
+- `build/runtime-pack-012/stdout.log` 与 `build/runtime-pack-mtr-only-012/stdout.log`：MTR + Optional Rail／仅 MTR 两种隔离环境的 `PACK_PROFILE`、`PACK_CONTINUITY`、`PACK_BANKING`、`PACK_TURNOUT`、`PACK_HANDOFF`、`PACK_SEAMS`、`PACK_PERFORMANCE`、`PACK_RELOAD`、`PACK_RUNTIME` 均通过。连续截面分别检查 4155／4170 点，最大接缝为 0；四种样式别名的隐藏边界一致。
+- 零倾角道岔整体俯视、入口俯视、外侧扣件近景与坡度渐变截图，以及可移植验证摘要，随 `MTR_Citizons_Railway` 配套仓库保存。原始运行日志留在上述本机构建目录。
+
+正式产物仍为 `build/libs/mtr_railway_point_advanced-0.1.2.jar`。本轮修改渲染、资源读取和验证，不修改网络握手、线路连接或服务端行车逻辑；隔离测试不等于完整整合包原存档的性能或真实列车运营验收。
+
 ## 2026-09-27：渲染交接端面与内侧灰块（0.1.2）
 
 本轮只修改端面生成与裁切后的补面，不改交点检测、轨道图或尖轨动作。证据目录：`build/endcap-patches-20260927/`，包含修改前、第一项完成后、最终源码快照与本轮差异。

@@ -1,15 +1,10 @@
 package org.mtrpoint.client;
 
-import org.mtr.mapping.holder.Identifier;
-import org.mtr.mod.render.*;
 import org.mtrpoint.geometry.*;
-import org.mtrpoint.mixin.GraphicsAccess;
 import java.util.*;
 
 /** Persistent world geometry, merged check rails and preserved third-party attachments. */
 public final class PointRenderer {
-    private static final List<Mesh.Quad> PRESERVED=new ArrayList<>();
-    private static final Map<String,Identifier> TEXTURES=new HashMap<>();
     private record GuardSource(PointClient.View view,PointSettings settings,Profile profile,ScissorsLayout group) {}
     private static List<GuardSource> guardSources=List.of();
     private static final Compiled GUARDS=new Compiled();
@@ -30,12 +25,11 @@ public final class PointRenderer {
         }
         double pad=source.profile.gauge()/2+source.settings.sleeperOverhang()+.5;return new Bounds(x0-pad,x1+pad,z0-pad,z1+pad);
     }
-    private record Face(Mesh.Quad source,float nx,float ny,float nz,long lightPos) {}
     private static final class Compiled {
         Mesh mesh;
         void update(Mesh next,double frame){mesh=next;}
     }
-    public static void clear(){GPU.values().forEach(PointGpu::close);GPU.clear();knownViews=List.of();ASSEMBLY_GPU.values().forEach(PointGpu::close);ASSEMBLY_GPU.clear();ASSEMBLIES.clear();PRESERVED.clear();TEXTURES.clear();guardSources=List.of();GUARDS.mesh=null;}
+    public static void clear(){GPU.values().forEach(PointGpu::close);GPU.clear();knownViews=List.of();ASSEMBLY_GPU.values().forEach(PointGpu::close);ASSEMBLY_GPU.clear();ASSEMBLIES.clear();RailCellCache.clear();guardSources=List.of();GUARDS.mesh=null;}
     private static void guards(List<PointClient.View> active){
         var next=active.stream().map(v->new GuardSource(v,v.settings,v.profile,v.scissors)).toList();
         if(next.equals(guardSources)&&GUARDS.mesh!=null)return;
@@ -69,21 +63,22 @@ public final class PointRenderer {
         // component: a guard that runs into a neighbour's crossing, stock rail or blade is severed
         // exactly where the two swept sections meet instead of passing through it.
         Mesh merged=DiamondGeometry.guards(runs,steel);
-        if(!runs.isEmpty())merged=RailSampler.bank(merged,next.get(0).view.junction,runs.stream().map(GuardRails.Run::road).distinct().toList());
-        Mesh supports=new Mesh();
+        if(!runs.isEmpty())merged=RailSampler.bank(merged,next.get(0).view.junction,runs.stream().map(GuardRails.Run::road).distinct().toList(),next.get(0).profile.source());
+        Mesh supports=new Mesh();var fasteners=new LinkedHashSet<Mesh.Quad>();
         for(int i=0;i<next.size();i++){
             var source=next.get(i);Profile tuned=source.profile.tune(source.settings);
             var cutters=new ArrayList<DiamondGeometry.Steel>(steel);
             Mesh check=new Mesh();
             for(var q:source.view.mesh().quads){
-                if(q.part().equals("sleeper")||q.part().equals("fastener"))supports.quad(q);
+                if(q.part().startsWith("fastener_"))fasteners.add(new Mesh.Quad(q.a(),q.b(),q.c(),q.d(),q.surface(),q.part(),-1,q.uv()));
+                else if(q.part().equals("sleeper")||q.part().equals("fastener"))supports.quad(q);
                 else if(q.part().equals("wing")&&source.view.junction.kind()!=Junction.Kind.DIAMOND&&q.index()!=-2)check.quad(q);
             }
             // These are incoming closure wings, joined to their route rails. Cutting them by
             // running-head overlap amputates their knees. Every road's flange channels still cut.
             supports.quads.addAll(DiamondGeometry.cutSteel(check,cutters,tuned,source.settings,tuned.top()+source.settings.verticalOffset(),source.view.drawnRoads(),false).quads);
         }
-        supports.quads.addAll(merged.quads);merged=SurfaceUnion.build(supports);
+        supports.quads.addAll(merged.quads);merged=SurfaceUnion.build(supports);merged.quads.addAll(fasteners);
         return merged;
     }
     /** Test access to the exact final assembly the frame renderer submits. */
@@ -118,33 +113,24 @@ public final class PointRenderer {
         PointClient.refreshCrossings(out,List.copyOf(roads.values()));
         return out;
     }
-    public static void preserve(org.mtr.mod.resource.RailResource resource,boolean flip,V3 a,V3 b){
-        var attachments=Profiles.attachments(resource.getId());if(attachments.isEmpty())return;
-        V3 f=b.sub(a).unit(),n=f.lateral().mul(flip?1:-1),center=a.lerp(b,.5).add(0,resource.getModelYOffset(),0);double sign=flip?-1:1;
-        java.util.function.Function<V3,V3> transform=v->center.add(n.mul(v.x())).add(f.mul(v.z()*sign)).add(0,v.y(),0);
-        for(var q:attachments)PRESERVED.add(new Mesh.Quad(transform.apply(q.a()),transform.apply(q.b()),transform.apply(q.c()),transform.apply(q.d()),q.surface(),q.part(),-1,q.uv()));
+    public static void preserve(org.mtr.core.data.Rail rail,org.mtr.mod.resource.RailResource resource,boolean flip,V3 a,V3 b){
+        ProfileModel model=RailLod.model(resource.getId(),a.lerp(b,.5));
+        cell(rail,resource,flip,a,b,model==null?Profiles.attachments(resource.getId()):model.attachments(),V3.ZERO,true);
+    }
+    public static void cell(org.mtr.core.data.Rail rail,org.mtr.mod.resource.RailResource resource,boolean flip,V3 a,V3 b,List<Mesh.Quad> faces,V3 shift,boolean swept){
+        if(faces.isEmpty())return;ProfileModel model=Profiles.model(resource.getId());
+        double zMin=model==null?-resource.getRepeatInterval()/2:model.detail().zMin(),zMax=model==null?resource.getRepeatInterval()/2:model.detail().zMax();
+        RailCellCache.submit(faces,RailSampler.sweep(rail,resource,a,b),flip,resource.getModelYOffset(),zMin,zMax,shift,swept);
     }
     public static void render(){
         var mc=net.minecraft.client.Minecraft.getInstance();if(mc.level==null||mc.player==null){clear();return;}
-        if(mc.screen instanceof BlueprintScreen||mc.screen instanceof PointSelectionScreen){PRESERVED.clear();return;}
-        Map<String,List<Face>> batches=new LinkedHashMap<>();
-        for(var q:PRESERVED)batches.computeIfAbsent(q.surface().texture(),k->new ArrayList<>()).add(face(q));PRESERVED.clear();
-        Map<Long,Integer> lights=new HashMap<>();
-        batches.forEach((texture,faces)->MainRenderer.scheduleRender(TEXTURES.computeIfAbsent(texture,Identifier::new),false,QueuedRenderLayer.EXTERIOR,(graphics,offset)->{
-            var access=(GraphicsAccess)(Object)graphics;var out=access.point$vertices();var pose=access.point$poses().last();
-            for(var f:faces){var q=f.source;var surface=q.surface();
-                int light=lights.computeIfAbsent(f.lightPos,k->net.minecraft.client.renderer.LevelRenderer.getLightColor(mc.level,net.minecraft.core.BlockPos.of(k)));
-
-                for(int i=0;i<4;i++){V3 v=switch(i){case 0->q.a();case 1->q.b();case 2->q.c();default->q.d();};float u=q.uv()==null?(i==0||i==3?surface.u0():surface.u1()):q.uv().get(i*2),vv=q.uv()==null?(i<2?surface.v0():surface.v1()):q.uv().get(i*2+1);
-                    out.vertex(pose.pose(),(float)(v.x()-offset.getXMapped()),(float)(v.y()-offset.getYMapped()),(float)(v.z()-offset.getZMapped()))
-                        .color(surface.color()).uv(u,vv).overlayCoords(net.minecraft.client.renderer.texture.OverlayTexture.NO_OVERLAY).uv2(light).normal(pose.normal(),f.nx,f.ny,f.nz).endVertex();
-                }
-            }
-        }));
+        if(mc.screen instanceof BlueprintScreen||mc.screen instanceof PointSelectionScreen){RailCellCache.discard();return;}
+        RailCellCache.finish();
     }
     public static void drawGpu(net.minecraftforge.client.event.RenderLevelStageEvent e){
         if(e.getStage()!=net.minecraftforge.client.event.RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS)return;
         var mc=net.minecraft.client.Minecraft.getInstance();if(mc.level==null||mc.player==null||mc.screen instanceof BlueprintScreen||mc.screen instanceof PointSelectionScreen)return;
+        RailCellCache.draw(e);
         if(knownViews!=PointClient.views){
             knownViews=PointClient.views;var retained=new HashSet<>(knownViews);
             for(var it=GPU.entrySet().iterator();it.hasNext();){var item=it.next();if(!retained.contains(item.getKey())){item.getValue().close();it.remove();}}
@@ -153,9 +139,5 @@ public final class PointRenderer {
         guards(active);
         for(Mesh mesh:ASSEMBLIES.values()){var gpu=ASSEMBLY_GPU.computeIfAbsent(mesh,k->new PointGpu());if(!gpu.visible(e))continue;gpu.update(mesh,0,false,false);gpu.draw(e);}
         for(var view:active){var gpu=GPU.computeIfAbsent(view,k->new PointGpu());if(gpu.hasSource(view.mesh)&&!gpu.visible(e))continue;Mesh mesh=view.mesh();gpu.update(mesh,view.renderedPosition(),view.settings.movableFrog(),true);gpu.draw(e);}
-    }
-    private static Face face(Mesh.Quad q){
-        V3 u=q.b().sub(q.a()),v=q.c().sub(q.a());double x=u.y()*v.z()-u.z()*v.y(),y=u.z()*v.x()-u.x()*v.z(),z=u.x()*v.y()-u.y()*v.x(),length=Math.max(1e-12,Math.sqrt(x*x+y*y+z*z));V3 c=q.center();
-        return new Face(q,(float)(x/length),(float)(y/length),(float)(z/length),net.minecraft.core.BlockPos.containing(c.x(),c.y()+.3,c.z()).asLong());
     }
 }

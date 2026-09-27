@@ -65,9 +65,9 @@ public final class PointClient {
                 var frames=middle==null?List.of(left,right):List.of(left,middle,right);
                 frames=DiamondGeometry.cutChannelFrames(frames,List.copyOf(cuttingRoads.values()),profile.tune(settings),settings);
                 var bankingRoads=scissors==null?junction.tracks():scissors.tracks();
-                left=RailSampler.bank(frames.get(0),junction,bankingRoads);
-                right=RailSampler.bank(frames.get(frames.size()-1),junction,bankingRoads);
-                if(middle!=null)middle=RailSampler.bank(frames.get(1),junction,bankingRoads);
+                left=RailSampler.bank(frames.get(0),junction,bankingRoads,profile.source());
+                right=RailSampler.bank(frames.get(frames.size()-1),junction,bankingRoads,profile.source());
+                if(middle!=null)middle=RailSampler.bank(frames.get(1),junction,bankingRoads,profile.source());
                 if(left.quads.size()!=right.quads.size()||middle!=null&&middle.quads.size()!=left.quads.size())throw new IllegalStateException("Animation topology changed for "+junction.id()+" "+junction.kind()+" scissors="+(scissors!=null)+" left="+left.quads.size()+" middle="+(middle==null?0:middle.quads.size())+" right="+right.quads.size()+" channels="+channels.size());
                 var indices=new ArrayList<Integer>();for(int i=0;i<left.quads.size();i++)if(!left.quads.get(i).equals(right.quads.get(i))||middle!=null&&!left.quads.get(i).equals(middle.quads.get(i)))indices.add(i);else if(right!=left)right.quads.set(i,left.quads.get(i));
                 moving=indices.stream().mapToInt(Integer::intValue).toArray();mesh=new Mesh();mesh.quads.addAll(left.quads);lastSettings=settings;lastFrame=-1;builds++;
@@ -293,8 +293,8 @@ public final class PointClient {
         return d>=start-margin&&d<=end+margin&&p.distance(t.at(d))<5;
     }
     public static List<String> styleIds(Junction j){var result=new LinkedHashSet<String>();for(Track track:j.tracks()){Rail r=MinecraftClientData.getInstance().railIdMap.get(track.id);if(r!=null)for(String id:r.getStyles()){id=RailResource.getIdWithoutDirection(id);if(id.equals("default")){id=org.mtr.mapping.mapper.OptimizedRenderer.hasOptimizedRendering()&&org.mtr.mod.config.Config.getClient().getDefaultRail3D()?(r.isSiding()?"default_3d_siding":"default_3d"):"default";}result.add(id);}}return List.copyOf(result);}
-    private static Profile profileFor(Junction j,PointSettings s){if(!s.profileStyle().isBlank())return Profiles.forced(s.profileStyle());for(String id:styleIds(j)){var a=Profiles.get(id);if(a.track()&&a.profile()!=null)return a.profile();}return new Profile(1.435,.264,.068,.14,.165,Profile.STEEL,Profile.TIMBER,"unmapped",false);}
-    private static Set<String> stylesFor(Junction j,PointSettings s){var styles=new HashSet<String>();if(!s.profileStyle().isBlank())styles.add(s.profileStyle());for(String id:styleIds(j))if(Profiles.get(id).track())styles.add(id);return styles;}
+    private static Profile profileFor(Junction j,PointSettings s){return Profiles.choose(styleIds(j),s.profileStyle());}
+    private static Set<String> stylesFor(Junction j,PointSettings s){var styles=new HashSet<String>();if(!s.profileStyle().isBlank()&&Profiles.get(s.profileStyle()).track())styles.add(Profiles.canonical(s.profileStyle()));for(String id:styleIds(j))if(Profiles.get(id).track())styles.add(Profiles.canonical(id));return styles;}
     public static V3 editCenter(View v){return v.junction.kind()!=Junction.Kind.DIAMOND?v.junction.a().at(Math.min(5,PointMesh.extent(v.junction,v.settings)/2)).lerp(v.junction.b().at(Math.min(5,PointMesh.extent(v.junction,v.settings)/2)),.5):v.junction.center();}
     public static View nearest(V3 p){return views.stream().filter(v->v.junction.center().distance(p)<64).min(Comparator.comparingDouble(v->editCenter(v).distance(p))).orElse(null);}
     /** Whether the mod draws this native cell instead of MTR: the same decision the renderer mixin
@@ -305,7 +305,7 @@ public final class PointClient {
     /** The native-cell decision for an explicit view set, shared with the renderer mixin so the
      *  rule that hides a native cell and the boundary the mod draws to stay one decision. */
     static boolean suppress(List<View> candidates,String railId,String style,V3 p,double margin){
-        if(railId==null)return false;style=RailResource.getIdWithoutDirection(style);
+        if(railId==null)return false;style=Profiles.canonical(style);
         for(View v:candidates)if(v.settings.enabled()&&!v.styles.isEmpty()&&v.styles.contains(style)){
             Junction j=v.junction;
             if(v.scissors!=null){if(v.scissors.owns(j,railId,p))return true;continue;}

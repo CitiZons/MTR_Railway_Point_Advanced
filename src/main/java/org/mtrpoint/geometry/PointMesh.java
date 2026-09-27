@@ -168,15 +168,15 @@ public final class PointMesh {
                 double other=shifted+(boundary.bLast()-boundary.aLast())*blend;
                 VSleepers.add(m,j,s,p,shifted,other,extent,index++);continue;}
             V3 c=base.at(shifted),n=sleeperNormal(j,s,shifted,start,end);
-            double lo=-p.centerOffset()-s.sleeperOverhang(),hi=-lo;
+            double lo=-p.centerOffset()-p.sleeperOverhang(s),hi=-lo;
             if(j.kind()==Junction.Kind.Y) {
                 V3 other=j.b().at(Math.min(j.b().length,shifted)); double lateral=other.sub(c).dot(n);
-                lo=Math.min(lo,lateral-p.centerOffset()-s.sleeperOverhang());hi=Math.max(hi,lateral+p.centerOffset()+s.sleeperOverhang());
+                lo=Math.min(lo,lateral-p.centerOffset()-p.sleeperOverhang(s));hi=Math.max(hi,lateral+p.centerOffset()+p.sleeperOverhang(s));
                 c=c.add(0,(other.y()-c.y())/2,0);
             } else {
                 // Slice the second track's footprint in this bearer's plane. One unified family
                 // carries both roads, including perpendicular diamonds, with no crossed ties.
-                V3 forward=new V3(n.z(),0,-n.x());double width=p.centerOffset()+s.sleeperOverhang();
+                V3 forward=new V3(n.z(),0,-n.x());double width=p.centerOffset()+p.sleeperOverhang(s);
                 V3 b0=j.b().at(j.sb()-extent),b1=j.b().at(j.sb()+extent),n0=j.b().tangent(j.sb()-extent).lateral(),n1=j.b().tangent(j.sb()+extent).lateral();
                 V3[] corners={b0.add(n0.mul(-width)),b1.add(n1.mul(-width)),b1.add(n1.mul(width)),b0.add(n0.mul(width))};
                 for(int k=0;k<4;k++){V3 u=corners[k].sub(c),v=corners[(k+1)%4].sub(c);double du=u.dot(forward),dv=v.dot(forward);if(du*dv<=0&&Math.abs(du-dv)>1e-8){double lateral=u.lerp(v,du/(du-dv)).dot(n);lo=Math.min(lo,lateral);hi=Math.max(hi,lateral);}}
@@ -184,24 +184,24 @@ public final class PointMesh {
             double top=Math.max(.03,p.top()-p.railHeight())+s.verticalOffset();
             // Intersect the actual four running rails with the bearer plane, so rotated
             // ties and supports remain directly under the rails instead of drifting sideways.
-            V3 forward=new V3(n.z(),0,-n.x());var seats=new ArrayList<V3>();
+            V3 forward=new V3(n.z(),0,-n.x());var seats=new FittingSeats();double stockSide=j.kind()==Junction.Kind.Y?TurnoutFrame.side(j,extent):0;
             for(Track road:List.of(j.a(),j.b()))for(int sign:new int[]{-1,1}){
                 double near=road.nearest(c);
                 for(int k=0;k<5;k++){V3 at=road.at(near).add(road.tangent(near).lateral().mul(sign*p.centerOffset()));double denominator=road.tangent(near).dot(forward);if(Math.abs(denominator)<.1)break;near=Math.max(0,Math.min(road.length,near-at.sub(c).dot(forward)/denominator));}
                 V3 seat=road.at(near).add(road.tangent(near).lateral().mul(sign*p.centerOffset()));
-                if(Math.abs(seat.sub(c).dot(forward))<.15&&seats.stream().noneMatch(v->v.distance(seat)<.18)){seats.add(seat);double lateral=seat.sub(c).dot(n);lo=Math.min(lo,lateral-s.sleeperOverhang());hi=Math.max(hi,lateral+s.sleeperOverhang());}
+                if(Math.abs(seat.sub(c).dot(forward))<.15){seats.add(seat,road.tangent(near).lateral(),stockSide!=0&&sign==(road==j.a()?-stockSide:stockSide));double lateral=seat.sub(c).dot(n);lo=Math.min(lo,lateral-p.sleeperOverhang(s));hi=Math.max(hi,lateral+p.sleeperOverhang(s));}
             }
             if(SleeperEdits.split(s,index)){
                 for(Track road:j.tracks())ordinarySleeper(m,road,road.nearest(c),n,s,p,index);
             }else if(p.detail()!=null){
                 if(!p.detail().siding())p.detail().bearer(m,c,n,lo,hi,s,p,index);
-                for(V3 seat:seats)p.detail().fitting(m,seat,n,s,p,index);
+                seats.emit(m,p,s,index);
             }else m.beam(c.add(n.mul(lo)),c.add(n.mul(hi)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);
             index++;
         }
     }
     private static void ordinarySleeper(Mesh mesh,Track road,double distance,V3 normal,PointSettings s,Profile p,int index){
-        V3 center=road.at(distance);double half=p.centerOffset()+s.sleeperOverhang();
+        V3 center=road.at(distance);double half=p.centerOffset()+p.sleeperOverhang(s);
         if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(mesh,center,normal,-half,half,s,p,index);for(int sign:new int[]{-1,1})p.detail().fitting(mesh,center.add(normal.mul(sign*p.centerOffset())),normal,s,p,index);}
         else {double top=p.top()-p.railHeight()+s.verticalOffset();mesh.beam(center.sub(normal.mul(half)),center.add(normal.mul(half)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
     }

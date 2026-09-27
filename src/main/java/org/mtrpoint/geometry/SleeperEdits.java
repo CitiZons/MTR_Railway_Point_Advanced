@@ -16,7 +16,7 @@ public final class SleeperEdits {
             double distance=Math.max(0,Math.min(road.length,added.distance()+settings.sleeperShifts().getOrDefault(index,0D)));
             V3 center=road.at(distance),normal=road.tangent(distance).lateral();
             double t=distance/Math.max(.001,road.length),angle=Math.toRadians(settings.sleeperAngle()+(settings.sleeperEndAngle()-settings.sleeperAngle())*t);
-            normal=rotate(normal,angle);double half=profile.centerOffset()+settings.sleeperOverhang();
+            normal=rotate(normal,angle);double half=profile.centerOffset()+profile.sleeperOverhang(settings);
             if(profile.detail()!=null){
                 if(!profile.detail().siding())profile.detail().bearer(mesh,center,normal,-half,half,settings,profile,index);
                 for(int sign:new int[]{-1,1})profile.detail().fitting(mesh,center.add(normal.mul(sign*profile.centerOffset())),normal,settings,profile,index);
@@ -25,7 +25,7 @@ public final class SleeperEdits {
                 mesh.beam(center.sub(normal.mul(half)),center.add(normal.mul(half)),settings.sleeperWidth(),settings.sleeperWidth(),top-settings.sleeperHeight(),top,profile.sleeper(),"sleeper",index);
             }
         }
-        mesh.quads.removeIf(q->q.index()>=0&&settings.sleeper(q.index(),PointSettings.SLEEPER_DELETED)&&(q.part().equals("sleeper")||q.part().equals("fastener")));
+        mesh.quads.removeIf(q->q.index()>=0&&settings.sleeper(q.index(),PointSettings.SLEEPER_DELETED)&&(q.part().equals("sleeper")||q.part().startsWith("fastener")));
     }
 
     public static void finish(Mesh mesh,Junction junction,PointSettings settings,Profile profile){finish(mesh,junction,junction.tracks(),settings,profile);}

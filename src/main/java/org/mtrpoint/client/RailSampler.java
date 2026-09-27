@@ -9,12 +9,41 @@ public final class RailSampler {
     private record Bank(double start,double end,Object frame) {}
     private record Sample(Track track,List<Bank> banks,Rail rail,Object nodeA,Object nodeB) {}
     private static final Map<String,Sample> SAMPLES=new HashMap<>();
+    private record ModelFrames(Sample sample,Track line,List<RailSweep> frames,Map<Cell,RailSweep> cells) {}
+    private static final Map<String,ModelFrames> MODEL_FRAMES=new HashMap<>();
     private static java.lang.reflect.Field frameField;
-    private static java.lang.reflect.Method renderMethod,nodeMethod,bankMethod,cantAMethod,cantBMethod;
+    private static java.lang.reflect.Method renderMethod,nodeMethod,bankMethod,cantAMethod,cantBMethod,tangentAMethod,tangentBMethod;
     private static boolean initialized;
     public static long sampleBuilds;
-    private static void initialize()throws ReflectiveOperationException{if(initialized)return;if(net.minecraftforge.fml.ModList.get().isLoaded("mtr_optional_rail_addon")){Class<?> geometry=Class.forName("org.mtroptional.client.RailGeometry");frameField=geometry.getField("FRAME");renderMethod=geometry.getMethod("render",Rail.class,RailMath.RenderRail.class,double.class,float.class,float.class);nodeMethod=Class.forName("org.mtroptional.client.ClientNodes").getMethod("get",long.class);Class<?> frame=Class.forName("org.mtroptional.client.RailGeometry$Frame");bankMethod=frame.getMethod("bank",double.class,double.class,double.class);cantAMethod=frame.getMethod("cantA");cantBMethod=frame.getMethod("cantB");}initialized=true;}
-    public static void clear(){SAMPLES.clear();}
+    public record Cell(V3 a,V3 b) {}
+    public static List<Cell> cells(Rail rail,double interval){
+        var cells=new ArrayList<Cell>();RailMath.RenderRail callback=(x1,z1,x2,z2,x3,z3,x4,z4,y1,y2)->cells.add(new Cell(new V3(x1,y1,z1),new V3(x3,y2,z3)));
+        try{initialize();if(renderMethod!=null)renderMethod.invoke(null,rail,callback,interval,0F,0F);else rail.railMath.render(callback,interval,0,0);}
+        catch(ReflectiveOperationException ex){org.mtrpoint.PointMod.LOG.warn("Could not align rail supports",ex);return List.of();}return cells;
+    }
+    public static double currentBank(){
+        try{initialize();if(frameField!=null){Object frame=((ThreadLocal<?>)frameField.get(null)).get();if(frame!=null)return Math.toRadians((((Number)cantAMethod.invoke(frame)).doubleValue()+((Number)cantBMethod.invoke(frame)).doubleValue())/2);}}
+        catch(ReflectiveOperationException ignored){}return 0;
+    }
+    public static void withoutBank(Runnable render){
+        ThreadLocal<Object> local=null;Object saved=null;
+        try{initialize();if(frameField!=null){local=(ThreadLocal<Object>)frameField.get(null);saved=local.get();local.remove();}}
+        catch(ReflectiveOperationException ex){throw new IllegalStateException(ex);}
+        try{render.run();}finally{if(local!=null&&saved!=null)local.set(saved);}
+    }
+    private static void initialize()throws ReflectiveOperationException{if(initialized)return;if(net.minecraftforge.fml.ModList.get().isLoaded("mtr_optional_rail_addon")){Class<?> geometry=Class.forName("org.mtroptional.client.RailGeometry");frameField=geometry.getField("FRAME");renderMethod=geometry.getMethod("render",Rail.class,RailMath.RenderRail.class,double.class,float.class,float.class);nodeMethod=Class.forName("org.mtroptional.client.ClientNodes").getMethod("get",long.class);Class<?> frame=Class.forName("org.mtroptional.client.RailGeometry$Frame");bankMethod=frame.getMethod("bank",double.class,double.class,double.class);cantAMethod=frame.getMethod("cantA");cantBMethod=frame.getMethod("cantB");tangentAMethod=frame.getMethod("ta");tangentBMethod=frame.getMethod("tb");}initialized=true;}
+    public static void clear(){SAMPLES.clear();MODEL_FRAMES.clear();}
+    public static void clearModels(){MODEL_FRAMES.clear();}
+    public static RailSweep sweep(Rail rail,org.mtr.mod.resource.RailResource resource,V3 a,V3 b){
+        if(rail!=null){if(!SAMPLES.containsKey(rail.getHexId()))sample(rail);var frames=modelFrames(rail.getHexId(),resource.getId());if(frames!=null){var frame=frames.cells.get(new Cell(a,b));if(frame!=null)return frame;}}
+        RailSweep frame=currentSweep(a,b);return frame==null?new RailSweep(a,b,b.sub(a).unit(),b.sub(a).unit(),0,0):frame;
+    }
+    private static RailSweep currentSweep(V3 a,V3 b){
+        try{initialize();if(frameField!=null){Object frame=((ThreadLocal<?>)frameField.get(null)).get();if(frame!=null){
+            var ta=(org.mtr.core.tool.Vector)tangentAMethod.invoke(frame);var tb=(org.mtr.core.tool.Vector)tangentBMethod.invoke(frame);
+            return new RailSweep(a,b,new V3(ta.x,ta.y,ta.z).unit(),new V3(tb.x,tb.y,tb.z).unit(),Math.toRadians(((Number)cantAMethod.invoke(frame)).doubleValue()),Math.toRadians(((Number)cantBMethod.invoke(frame)).doubleValue()));
+        }}}catch(ReflectiveOperationException ex){org.mtrpoint.PointMod.LOG.warn("Could not sample rail section",ex);}return null;
+    }
     public static Track sample(Rail rail){
         var ends=new ObjectArraySet<Position>();rail.writePositions(ends);if(ends.size()!=2)return null;Position[] p=ends.toArray(new Position[0]);
         Object na=null,nb=null;
@@ -87,7 +116,7 @@ public final class RailSampler {
     private static Set<Double> intervals(Rail rail,PointSettings settings){
         var intervals=new LinkedHashSet<Double>();
         for(String raw:rail.getStyles()){
-            String id=org.mtr.mod.resource.RailResource.getIdWithoutDirection(raw);
+            String id=Profiles.canonical(raw);
             if(id.equals("default")&&org.mtr.mapping.mapper.OptimizedRenderer.hasOptimizedRendering()&&org.mtr.mod.config.Config.getClient().getDefaultRail3D())id=rail.isSiding()?"default_3d_siding":"default_3d";
             if(!Profiles.get(id).track()&&!id.equals(settings.profileStyle()))continue;
             if(id.equals("default"))intervals.add(.5);
@@ -99,7 +128,7 @@ public final class RailSampler {
         Sample sample=SAMPLES.get(track.id);if(sample==null)return new double[]{nominal,fallbackLast};
         Rail rail=sample.rail;var intervals=new LinkedHashSet<Double>();
         for(String raw:rail.getStyles()){
-            String id=org.mtr.mod.resource.RailResource.getIdWithoutDirection(raw);
+            String id=Profiles.canonical(raw);
             if(id.equals("default")&&org.mtr.mapping.mapper.OptimizedRenderer.hasOptimizedRendering()&&org.mtr.mod.config.Config.getClient().getDefaultRail3D())id=rail.isSiding()?"default_3d_siding":"default_3d";
             if(!Profiles.get(id).track()&&!id.equals(settings.profileStyle()))continue;
             if(id.equals("default"))intervals.add(.5);
@@ -116,6 +145,52 @@ public final class RailSampler {
         return found[1]<0?new double[]{nominal,fallbackLast}:found;
     }
     public static Mesh bank(Mesh mesh,Junction j){return bank(mesh,j,j.tracks());}
+    /** Opt-in OBJ profiles follow the exact native model cells instead of the flat-texture
+     *  endpoint bank adapter. Cell length, direction, grade and model-offset pivot all agree. */
+    public static Mesh bank(Mesh mesh,Junction j,List<Track> roads,String style){
+        if(roads.stream().noneMatch(t->SAMPLES.containsKey(t.id)))return mesh;
+        if(Profiles.model(style)==null)return bank(mesh,j,roads);
+        var frames=new ArrayList<ModelFrames>();
+        for(var road:roads){var f=modelFrames(road.id,style);if(f!=null)frames.add(f);}
+        if(frames.isEmpty())return mesh;
+        Mesh transformed=new Mesh();Map<V3,V3> cache=new HashMap<>();
+        for(var q:mesh.quads)transformed.quad(new Mesh.Quad(cache.computeIfAbsent(q.a(),p->modelPoint(p,frames)),cache.computeIfAbsent(q.b(),p->modelPoint(p,frames)),cache.computeIfAbsent(q.c(),p->modelPoint(p,frames)),cache.computeIfAbsent(q.d(),p->modelPoint(p,frames)),q.surface(),q.part(),q.index(),q.uv()));
+        return transformed;
+    }
+    private static ModelFrames modelFrames(String railId,String style){
+        Sample sample=SAMPLES.get(railId);if(sample==null)return null;
+        String key=railId+"/"+style;ModelFrames cached=MODEL_FRAMES.get(key);if(cached!=null&&cached.sample==sample)return cached;
+        org.mtr.mod.resource.RailResource[] resource={null};org.mtr.mod.client.CustomResourceLoader.getRailById(style,r->resource[0]=r);if(resource[0]==null)return null;
+        var rawCells=new ArrayList<Cell>();var points=new ArrayList<V3>();var frames=new ArrayList<RailSweep>();
+        RailMath.RenderRail callback=(x1,z1,x2,z2,x3,z3,x4,z4,y1,y2)->{
+            V3 a=new V3(x1,y1,z1),b=new V3(x3,y2,z3);rawCells.add(new Cell(a,b));
+            frames.add(currentSweep(a,b));
+        };
+        try{initialize();if(renderMethod!=null)renderMethod.invoke(null,sample.rail,callback,resource[0].getRepeatInterval(),0F,0F);else sample.rail.railMath.render(callback,resource[0].getRepeatInterval(),0,0);}
+        catch(ReflectiveOperationException ex){org.mtrpoint.PointMod.LOG.warn("Could not sample model banking",ex);return null;}
+        if(frames.isEmpty())return null;
+        // RailMath restarts its repeat phase at the second horizontal arc. Its first arc can
+        // overrun that restart, so raw callbacks do not always share endpoints. Keep their
+        // exact keys for lookup, but end each visible sweep at the next callback's start.
+        for(Cell cell:rawCells)points.add(cell.a());
+        points.add(rawCells.get(rawCells.size()-1).b());
+        var cellFrames=new HashMap<Cell,RailSweep>();
+        for(int i=0;i<frames.size();i++){
+            var raw=frames.get(i);
+            V3 ta=raw==null?points.get(i+1).sub(points.get(Math.max(0,i-1))).unit():raw.tangentA();
+            V3 tb=raw==null?points.get(Math.min(points.size()-1,i+2)).sub(points.get(i)).unit():raw.tangentB();
+            frames.set(i,new RailSweep(points.get(i),points.get(i+1),ta,tb,raw==null?0:raw.cantA(),raw==null?0:raw.cantB()));
+            cellFrames.put(rawCells.get(i),frames.get(i));
+        }
+        var result=new ModelFrames(sample,new Track(railId,"a","b",points),List.copyOf(frames),Map.copyOf(cellFrames));MODEL_FRAMES.put(key,result);return result;
+    }
+    private static V3 modelPoint(V3 p,List<ModelFrames> frames){
+        ModelFrames nearest=null;double station=0,best=Double.MAX_VALUE;
+        for(var f:frames){double s=f.line.nearestHorizontal(p),error=p.distance(f.line.at(s));if(error<best){best=error;station=s;nearest=f;}}
+        if(nearest==null)return p;
+        int index=Arrays.binarySearch(nearest.line.distance,station);if(index<0)index=-index-2;
+        return nearest.frames.get(Math.max(0,Math.min(nearest.frames.size()-1,index))).world(p);
+    }
     public static Mesh bank(Mesh mesh,Junction j,List<Track> roads){
         List<Sample> samples=roads.stream().map(t->SAMPLES.get(t.id)).filter(Objects::nonNull).toList();
         if(samples.stream().allMatch(v->v.banks.isEmpty()))return mesh;
@@ -129,6 +204,6 @@ public final class RailSampler {
         if(s==null)return p;
         for(Bank bank:s.banks)if(distance>=bank.start-1e-6&&distance<=bank.end+1e-6)try{var v=(org.mtr.core.tool.Vector)bankMethod.invoke(bank.frame,p.x(),p.y(),p.z());return new V3(v.x,v.y,v.z);}catch(ReflectiveOperationException ex){return p;}return p;
     }
-    public static void retain(Set<String> ids){SAMPLES.keySet().retainAll(ids);}
+    public static void retain(Set<String> ids){SAMPLES.keySet().retainAll(ids);MODEL_FRAMES.entrySet().removeIf(e->!ids.contains(e.getValue().sample.track.id));SleeperSeams.retain(ids);}
     public static String node(Position p){return p.getX()+","+p.getY()+","+p.getZ();}
 }

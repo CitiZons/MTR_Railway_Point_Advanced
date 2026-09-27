@@ -15,7 +15,7 @@ public final class BlueprintWire {
     public long builds;public int edgeCount(){return edges.size();}
     private void build(Mesh mesh){
         var unique=new LinkedHashSet<Edge>();
-        for(var q:mesh.quads){V3[] p={q.a(),q.b(),q.c(),q.d()};for(int i=0;i<4;i++){V3 a=p[i],b=p[(i+1)%4];if(a.equals(b))continue;
+        for(var q:mesh.quads){if(q.part().equals("fastener_mid")||q.part().equals("fastener_far"))continue;V3[] p={q.a(),q.b(),q.c(),q.d()};for(int i=0;i<4;i++){V3 a=p[i],b=p[(i+1)%4];if(a.equals(b))continue;
             if(compare(a,b)>0){V3 swap=a;a=b;b=swap;}unique.add(new Edge(a,b,q.part(),q.index()));}}
         edges=List.copyOf(unique);builds++;
     }

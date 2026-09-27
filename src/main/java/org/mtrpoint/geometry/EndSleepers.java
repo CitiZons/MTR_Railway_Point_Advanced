@@ -26,7 +26,7 @@ public final class EndSleepers {
             double covered=Math.min(coveredSeats[0],coveredSeats[1]);double gap=last-covered;if(gap<s.sleeperSpacing()*.8)continue;
             int count=Math.max(1,(int)Math.ceil(gap/s.sleeperSpacing()));
             for(int k=1;k<=count;k++){
-                double d=covered+gap*k/count;V3 c=road.at(d),n=road.tangent(d).lateral();double half=p.centerOffset()+s.sleeperOverhang();
+                double d=covered+gap*k/count;V3 c=road.at(d),n=road.tangent(d).lateral();double half=p.centerOffset()+p.sleeperOverhang(s);
                 if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(mesh,c,n,-half,half,s,p,index);for(int sign:new int[]{-1,1})p.detail().fitting(mesh,c.add(n.mul(sign*p.centerOffset())),n,s,p,index);}
                 else {double top=p.top()-p.railHeight()+s.verticalOffset();mesh.beam(c.sub(n.mul(half)),c.add(n.mul(half)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
                 index++;

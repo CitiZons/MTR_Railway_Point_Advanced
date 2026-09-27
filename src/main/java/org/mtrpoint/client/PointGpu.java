@@ -15,7 +15,8 @@ import java.util.*;
 
 /** Persistent GPU geometry: stationary turnouts submit draw calls, not every vertex. */
 final class PointGpu implements AutoCloseable {
-    private record Batch(VertexBuffer buffer,RenderType type){}
+    private record Batch(VertexBuffer buffer,RenderType type,int lod,V3 center,int faces){}
+    private record Group(String texture,int lod,int x,int y,int z){}
     // BufferBuilder owns native memory; reuse one staging buffer instead of allocating per throw.
     private static final BufferBuilder STAGING=new BufferBuilder(262144);
     private final List<Batch> fixed=new ArrayList<>(),moving=new ArrayList<>();
@@ -23,9 +24,11 @@ final class PointGpu implements AutoCloseable {
     private Mesh source;private double frame;private long lightTick=-100;private V3 origin;private AABB bounds;
     private final Map<Long,Integer> bakedLight=new HashMap<>();
     static long uploads,draws,vertices;
+    static long submittedFaces;
+    static final long[] lodDraws=new long[3];
     /** Parts the per-view draw hides because the shared component assembly owns them instead. */
     static boolean hiddenInView(Mesh.Quad q){
-        String part=q.part();return part.equals("guard")||part.equals("sleeper")||part.equals("fastener")||part.equals("wing");
+        String part=q.part();return part.equals("guard")||part.equals("sleeper")||part.startsWith("fastener")||part.equals("wing");
     }
     void update(Mesh mesh,double position,boolean movable,boolean removeGuards){
         var mc=Minecraft.getInstance();long tick=mc.level.getGameTime();boolean changed=source!=mesh;
@@ -49,7 +52,8 @@ final class PointGpu implements AutoCloseable {
     }
     private void upload(List<Batch> target,List<Integer> ids){
         target.forEach(b->b.buffer.close());target.clear();if(ids.isEmpty())return;
-        var groups=new LinkedHashMap<String,List<Integer>>();for(int i:ids)groups.computeIfAbsent(source.quads.get(i).surface().texture(),k->new ArrayList<>()).add(i);
+        var groups=new LinkedHashMap<Group,List<Integer>>();for(int i:ids){var q=source.quads.get(i);int lod=switch(q.part()){case "fastener_near"->0;case "fastener_mid"->1;case "fastener_far"->2;default->-1;};V3 c=q.center();
+            var group=new Group(q.surface().texture(),lod,lod<0?0:(int)Math.floor(c.x()/4),lod<0?0:(int)Math.floor(c.y()/4),lod<0?0:(int)Math.floor(c.z()/4));groups.computeIfAbsent(group,k->new ArrayList<>()).add(i);}
         var lights=bakedLight;var mc=Minecraft.getInstance();
         for(var entry:groups.entrySet()){
             BufferBuilder b=STAGING;b.begin(VertexFormat.Mode.QUADS,DefaultVertexFormat.NEW_ENTITY);
@@ -65,7 +69,7 @@ final class PointGpu implements AutoCloseable {
                 }
             }
             VertexBuffer gpu=new VertexBuffer(VertexBuffer.Usage.STATIC);gpu.bind();gpu.upload(b.end());VertexBuffer.unbind();
-            target.add(new Batch(gpu,PointRenderType.texture(new ResourceLocation(entry.getKey()))));uploads++;
+            Group group=entry.getKey();target.add(new Batch(gpu,PointRenderType.texture(new ResourceLocation(group.texture)),group.lod,new V3(group.x*4+2,group.y*4+2,group.z*4+2),entry.getValue().size()));uploads++;
         }
     }
     boolean visible(RenderLevelStageEvent e){return bounds==null||e.getFrustum().isVisible(bounds);}
@@ -76,7 +80,7 @@ final class PointGpu implements AutoCloseable {
         draw(fixed,pose,e.getProjectionMatrix());draw(moving,pose,e.getProjectionMatrix());
     }
     private static void draw(List<Batch> batches,Matrix4f pose,Matrix4f projection){
-        for(var b:batches){b.type.setupRenderState();b.buffer.bind();b.buffer.drawWithShader(pose,projection,RenderSystem.getShader());VertexBuffer.unbind();b.type.clearRenderState();draws++;}
+        for(var b:batches){if(b.lod>=0&&RailLod.level(b.center)!=b.lod)continue;b.type.setupRenderState();b.buffer.bind();b.buffer.drawWithShader(pose,projection,RenderSystem.getShader());VertexBuffer.unbind();b.type.clearRenderState();draws++;submittedFaces+=b.faces;if(b.lod>=0)lodDraws[b.lod]++;}
     }
     public void close(){fixed.forEach(b->b.buffer.close());moving.forEach(b->b.buffer.close());fixed.clear();moving.clear();source=null;bounds=null;}
 }

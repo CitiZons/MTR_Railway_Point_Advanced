@@ -43,6 +43,7 @@ public final class RuntimeProbe {
     }
     private void worldTick(Minecraft mc){
         if(mc.level==null||mc.player==null)return;
+        if(Boolean.getBoolean("pointProbePack")){RailPackProbe.tick(mc);return;}
         if(!System.getProperty("pointProbeLayout","").isBlank()){SavedLayoutProbe.tick(mc);return;}
         if(!worldReady){
             worldReady=true;rails=new ArrayList<>();

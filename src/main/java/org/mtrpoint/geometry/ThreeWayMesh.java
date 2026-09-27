@@ -149,7 +149,7 @@ public final class ThreeWayMesh {
             // Each adjacent pair stops sharing bearers when its own two ordinary
             // sleeper envelopes separate. An asymmetric fan has two distinct ends.
             V3 transverse=n.add(normals.get(outer)).unit();
-            if(Math.abs(centers.get(outer).sub(middle).dot(transverse))>2*(p.centerOffset()+s.sleeperOverhang()))continue;
+            if(Math.abs(centers.get(outer).sub(middle).dot(transverse))>2*(p.centerOffset()+p.sleeperOverhang(s)))continue;
             V3 joint=middle.add(n.mul(centers.get(outer).sub(middle).dot(n)/2));joints[outer/2]=joint;
             if(s.sleeperMode()==4){
                 double at=distances.get(outer),angle=Math.atan2(V3.crossXZ(roads.get(outer).tangent(at).lateral(),normals.get(outer)),roads.get(outer).tangent(at).lateral().dot(normals.get(outer)));
@@ -157,9 +157,9 @@ public final class ThreeWayMesh {
                 V3 lateral=roads.get(outer).tangent(at).lateral();normals.set(outer,new V3(lateral.x()*Math.cos(angle)-lateral.z()*Math.sin(angle),0,lateral.x()*Math.sin(angle)+lateral.z()*Math.cos(angle)));
             }
         }
-        var seats=new ArrayList<V3>();
+        var seats=new FittingSeats();
         for(int branch=0;branch<3;branch++){
-            V3 c=centers.get(branch),n=normals.get(branch);double half=p.centerOffset()+s.sleeperOverhang();Mesh arm=new Mesh();
+            V3 c=centers.get(branch),n=normals.get(branch);double half=p.centerOffset()+p.sleeperOverhang(s);Mesh arm=new Mesh();
             double lo=-half,hi=half;
             if(!SleeperEdits.split(s,index))for(int adjacent:new int[]{branch-1,branch+1})if(adjacent>=0&&adjacent<3&&joints[Math.min(branch,adjacent)]!=null){double join=joints[Math.min(branch,adjacent)].sub(c).dot(n);lo=Math.min(lo,join-.4);hi=Math.max(hi,join+.4);}
             if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(arm,c,n,lo,hi,s,p,index);}
@@ -172,8 +172,9 @@ public final class ThreeWayMesh {
             if(p.detail()!=null)for(int sign:new int[]{-1,1}){
                 Track road=roads.get(branch);double d=distances.get(branch);V3 forward=new V3(n.z(),0,-n.x());
                 for(int k=0;k<5;k++){V3 at=rail(road,d,sign,p);double den=road.tangent(d).dot(forward);if(Math.abs(den)<.1)break;d=Math.max(0,Math.min(road.length,d-at.sub(c).dot(forward)/den));}
-                V3 seat=rail(road,d,sign,p);if(seats.stream().noneMatch(v->v.distance(seat)<.18)){seats.add(seat);p.detail().fitting(out,seat,n,s,p,index);}
+                V3 seat=rail(road,d,sign,p);seats.add(seat,road.tangent(d).lateral(),branch==0&&sign<0||branch==2&&sign>0);
             }
         }
+        seats.emit(out,p,s,index);
     }
 }
