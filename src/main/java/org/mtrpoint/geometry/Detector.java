@@ -66,7 +66,29 @@ public final class Detector {
                     entries.add(new Segment(t,i));
                 }
         }
-        return List.copyOf(result);
+        return deduplicate(result);
+    }
+    public static List<Junction> deduplicate(List<Junction> result){
+        var unique=new ArrayList<Junction>();
+        for(var candidate:result){boolean duplicate=false;for(var existing:unique)if(sameGeometry(existing,candidate)){duplicate=true;break;}if(!duplicate)unique.add(candidate);}
+        return List.copyOf(unique);
+    }
+    /** Pairwise node detection can see the same physical turnout twice when a resource or
+     * integration exposes duplicate rail IDs. Keep one junction for identical geometry; genuine
+     * opposite-side turnouts remain distinct because their rail paths do not coincide. */
+    private static boolean sameGeometry(Junction a,Junction b){
+        if(a.kind()!=b.kind()||a.center().distance(b.center())>.025||Math.abs(a.extent()-b.extent())>.05||a.tracks().size()!=b.tracks().size())return false;
+        var unmatched=new ArrayList<>(b.tracks());
+        for(Track left:a.tracks()){
+            int hit=-1;for(int i=0;i<unmatched.size();i++)if(sameTrack(left,unmatched.get(i))){hit=i;break;}
+            if(hit<0)return false;unmatched.remove(hit);
+        }
+        return true;
+    }
+    private static boolean sameTrack(Track a,Track b){
+        if(a.points.size()!=b.points.size()||Math.abs(a.length-b.length)>.02)return false;
+        for(int i=0;i<a.points.size();i++)if(a.points.get(i).distance(b.points.get(i))>.015)return false;
+        return true;
     }
     /** True when the track is really pieced at this station: another rail continues it straight on
      *  the same node, so a crossing landing there is an interior crossing of the physical track. A

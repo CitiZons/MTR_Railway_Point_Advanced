@@ -64,6 +64,8 @@ public final class Regression {
         var opposite=new ArrayList<Track>();opposite.add(rails.get(0));opposite.add(rails.get(1));
         for(int i=0;i<2;i++){Track t=rails.get(i);opposite.add(new Track("opposite"+i,t.startNode,"back"+i,t.points.stream().map(v->new V3(-v.x(),v.y(),-v.z())).toList()));}
         require(Detector.find(opposite).stream().filter(v->v.kind()==Junction.Kind.Y).count()==2,"Both Y sides at one four-arm node");
+        var duplicate=Detector.find(rails.subList(0,2)).get(0);var same=new Junction("duplicate",duplicate.kind(),duplicate.a(),duplicate.b(),duplicate.center(),duplicate.sa(),duplicate.sb(),duplicate.extent(),duplicate.third());
+        require(Detector.deduplicate(List.of(duplicate,same)).size()==1,"Identical turnout geometry was deduplicated");
         var three=new ArrayList<>(List.of(rails.get(0),rails.get(1),line("middle","0,0,0","0,0,30",new V3(0,0,0),new V3(0,0,30))));
         var triple=Detector.find(three);require(triple.size()==1&&triple.get(0).kind()==Junction.Kind.THREE,"Three-way fan has one independent editor");
         require(GuardRails.assembled(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,null,null).size()==12,"All three-way checks enter the shared assembly");
