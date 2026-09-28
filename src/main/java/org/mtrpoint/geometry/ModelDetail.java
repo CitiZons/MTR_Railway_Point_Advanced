@@ -22,7 +22,14 @@ public record ModelDetail(List<Mesh.Quad> rails,List<Mesh.Quad> bearers,List<Mes
             return a.lerp(b,t).add(n.mul((v.x()-railCenter)*width*taper)).add(0,v.y()-railTop+p.top()+s.verticalOffset(),0);},part,-1);
     }
     public void bearer(Mesh mesh,V3 c,V3 n,double lo,double hi,PointSettings s,Profile p,int index){
+        bearer(mesh,c,n,lo,hi,s,p,index,false);
+    }
+    /** A long turnout bearer keeps the source sleeper's bevel and underside, but its top samples
+     *  one clean atlas point instead of stretching the ordinary two-rail seat shadow. */
+    public void bearer(Mesh mesh,V3 c,V3 n,double lo,double hi,PointSettings s,Profile p,int index,boolean turnout){
         V3 along=new V3(n.z(),0,-n.x());double top=p.top()-railTop+bearerTop+s.verticalOffset();
+        double bottom=bearers.stream().flatMap(q->java.util.stream.Stream.of(q.a(),q.b(),q.c(),q.d())).mapToDouble(V3::y).min().orElse(bearerTop);
+        var ringTop=new HashMap<Long,Double>();if(turnout)for(var q:bearers)for(V3 v:List.of(q.a(),q.b(),q.c(),q.d()))ringTop.merge(Math.round(v.x()*10000),v.y(),Math::max);
         for(var original:bearers){
             var face=original;
             if(nativeAtlas&&original.uv()!=null&&Math.abs(original.a().y()-bearerTop)<.001&&Math.abs(original.c().y()-bearerTop)<.001){
@@ -31,8 +38,9 @@ public record ModelDetail(List<Mesh.Quad> rails,List<Mesh.Quad> bearers,List<Mes
                 var uv=new ArrayList<>(original.uv());for(int i=0;i<8;i+=2)uv.set(i,(min+max)/2+(uv.get(i)-(min+max)/2)*.18F);
                 face=new Mesh.Quad(face.a(),face.b(),face.c(),face.d(),face.surface(),face.part(),face.index(),List.copyOf(uv));
             }
-            emit(mesh,face,v->c.add(n.mul(lo+(v.x()+halfBearer)/(2*halfBearer)*(hi-lo)))
-                .add(along.mul(v.z()*s.sleeperWidth()/.24)).add(0,top+(v.y()-bearerTop)*s.sleeperHeight()/.12,0),"sleeper",index);
+            emit(mesh,face,v->{double y=v.y();if(turnout){double ring=ringTop.getOrDefault(Math.round(v.x()*10000),bearerTop),span=ring-bottom;
+                    if(span>1e-7){double weight=Math.max(0,Math.min(1,(y-bottom)/span));y+=(bearerTop-ring)*weight;}}
+                return c.add(n.mul(lo+(v.x()+halfBearer)/(2*halfBearer)*(hi-lo))).add(along.mul(v.z()*s.sleeperWidth()/.24)).add(0,top+(y-bearerTop)*s.sleeperHeight()/.12,0);},"sleeper",index);
         }
     }
     public void fitting(Mesh mesh,V3 center,V3 n,PointSettings s,Profile p,int index){

@@ -1,5 +1,31 @@
 # 验证记录
 
+## 0.1.3 发布整理（2026-09-28）
+
+发布版本由 0.1.2 升至 0.1.3，配套资源包为 Citizons Railway 0.1.0。安装说明、构建版本及运行探针产物路径已同步更新；网络协议保持 3。此前本文件中的 0.1.2 支撑／翼轨记录对应升版前的同一实现，日期和产物路径作为历史证据保留。
+
+发布构建日志为 `build/release-013-build.log`：Java 17 离线 `build smokeJar` 全部通过，耗时 3 分 49 秒。生产 JAR 元数据为 0.1.3，未包含开发探针；交付文件为 `build/libs/mtr_railway_point_advanced-0.1.3.jar`。本次升版不改变已通过游戏截图验收的几何实现，未为纯版本变更重复游戏测试。
+
+## 2026-09-28：补齐翼轨承座（0.1.2）
+
+- 修复上一轮遗漏：Y 道岔支撑列表原先只有护轨，三开也过滤了翼轨。现在使用包含翼轨及编辑后端部形状的支撑列表；V 形和三开按各自轨道、枕木方向放置共用底板及腹板加强支架，替换该承座处的普通扣件。
+- 新增翼轨回归在旧实现上明确失败（`build/wing-before.log`），修复后 Y 普通／V 形两种枕木的两根翼轨、三开的六根翼轨均有承座和支架，三个距离档位均通过（`build/wing-focused.log`）。
+- `build/wing-build.log`：Java 17 离线完整 `build smokeJar` 通过，3 分 5 秒。`build/support-render-baseline/world-wing-final.sha256` 的 9 组最终世界非支撑几何与基线完全一致。
+- 本次复跑 MTR + Optional Rail 隔离场景，`build/runtime-support-012/stdout.log` 的最终运行、支撑、资源重载和缓存检查通过；静止 64 帧内几何重建／上传均为 0。已查看 `pack-wing-base-close.png` 和 `pack-frog-base-close.png`；持久副本位于相邻 `railway_resource_checks/output/wing-supports-20260928/`。
+
+产物仍为 `build/libs/mtr_railway_point_advanced-0.1.2.jar`。本次未修改钢轨或连杆几何、渲染入口、网络及行车逻辑，未 commit／push。
+
+## 2026-09-28：岔枕平顶、尖轨滑床板与护轨共用承座（0.1.2）
+
+- 本轮生产改动限定为枕木与扣件生成。多轨岔枕将模型中央下凹抬至承轨面，保留底面和倒角；普通轨枕保留原模型。逐顶点检查底面保留、共享顶点一致及顶面高度，修复最初截图中因底面被错误抬高造成的重叠黑纹。
+- 尖轨活动段采用固定滑床板，基本轨外侧保留夹持；岔心相邻承轨座使用共用底板；护轨与相邻运行轨共用底板，并增加外侧腹板、加强肋和螺栓。底板从枕顶延伸至资源模型的真实轨底高度，近、中、远三个档位复用现有距离渲染。
+- `build/support-verified-build.log`：Java 17 离线 `build smokeJar` 完整通过，耗时 3 分 9 秒。最终测试断言调整另由 `build/support-focused-final.log` 验证通过，覆盖普通枕木、平顶底面、V 形支撑、尖轨三个位置、坡道、三开、单枕移动／删除和距离档位。
+- `build/runtime-support-mtr-only-012/stdout.log` 与 `build/runtime-support-012/stdout.log`：仅 MTR、MTR + Optional Rail 两种隔离环境均通过资源读取、轨段连续性、倾斜轴一致、岔区接管、接缝、静态缓存、固定支撑、资源重载及最终运行检查。两种环境分别观察 65／39 个静止帧，几何重建与上传均为 0；三个距离档位均实际绘制。这不是整合包 FPS 对比测试。
+- 12 组原始非支撑几何与 HEAD `8b08dacc` 一致。最终世界渲染对比按真实资源加载中／远距离扣件模板，9 组 Y／V 形／三开及不同尖轨位置的全部非支撑面数量、顶点和 UV 完全一致（`build/support-render-baseline/world-runtime-head.sha256` 与 `world-runtime-final.sha256`）。旧的只加载近景模板的临时脚本将扣件错误归入钢轨合并流程，不能用它断言实际游戏钢轨发生变化。
+- 已逐张查看零倾角滑床板、护轨承座、岔心底板和倾斜道岔截图。持久截图目录为相邻工作区的 `railway_resource_checks/output/turnout-supports-20260928/`，原始截图和日志保存在上述隔离运行目录。
+
+交付 `build/libs/mtr_railway_point_advanced-0.1.2.jar` 与两次游戏验证使用的 JAR 内容一致。未安装到真实客户端或修改用户存档；本轮未 commit／push。极端交角及完整整合包实际线路不在本轮截图验收范围内。
+
 ## 2026-09-28：Citizons Railway 资源模型、连续轨面与距离细节（0.1.2）
 
 - OBJ 分组读取保留钢轨、轨枕、扣件和道砟的模型材质及 UV；普通轨道和道岔使用同一截面。共享端点扫掠修复坡度／倾角渐变断口，并处理 MTR 双圆弧重复相位重启。资源包道砟最大厚度为 0.35 m，与轨层共用倾斜轴。

@@ -80,13 +80,58 @@ final class RailPackProbe {
             PointClient.invalidate();PointClient.rebuild();camera(mc,.6,69,2.8,0,90);
         }
         if(ticks==246)shot(mc,"pack-turnout-toe-top.png");
-        if(ticks==248){beforeReload=Profiles.get(STYLE).profile().detail();reload=mc.reloadResourcePacks();}
-        if(ticks>250&&reload!=null&&reload.isDone()&&mc.getOverlay()==null){
+        if(ticks==248){
+            checkTurnoutSupports();var view=turnout();double at=TurnoutFrame.start(view.junction,PointMesh.extent(view.junction,view.settings))+.9;
+            V3 target=view.junction.a().at(at).add(view.junction.a().tangent(at).lateral().mul(-view.profile.centerOffset())).add(0,.12,0);
+            supportCamera(mc,target,view.junction.a().tangent(at),1.1,1.1,1.05);
+        }
+        if(ticks==268)shot(mc,"pack-slide-bed-close.png");
+        if(ticks==270){
+            var view=turnout();var run=GuardRails.assembled(view.junction,view.settings,view.profile,null,null).stream().filter(r->r.part().equals("guard")).findFirst().orElseThrow();
+            double at=(run.start()+run.end())/2;V3 target=run.point(at).add(0,.12,0);
+            supportCamera(mc,target,run.road().tangent(at),Math.signum(run.offset())*1.2,1.05,1.2);
+        }
+        if(ticks==290)shot(mc,"pack-guard-base-close.png");
+        if(ticks==292){
+            var view=turnout();var frog=new FrogGeometry(view.junction,view.settings,view.profile,PointMesh.extent(view.junction,view.settings));
+            supportCamera(mc,frog.center().add(0,.12,0),view.junction.a().tangent(frog.sa),.55,1.8,1.7);
+        }
+        if(ticks==312)shot(mc,"pack-frog-base-close.png");
+        if(ticks==314){
+            var view=turnout();var run=GuardRails.assembled(view.junction,view.settings,view.profile,null,null).stream().filter(r->r.part().equals("wing")).findFirst().orElseThrow();
+            double at=(run.start()+run.end())/2;
+            supportCamera(mc,run.point(at).add(0,.10,0),run.road().tangent(at),-Math.signum(run.offset())*.8,1.15,.85);
+        }
+        if(ticks==334)shot(mc,"pack-wing-base-close.png");
+        if(ticks==336){beforeReload=Profiles.get(STYLE).profile().detail();reload=mc.reloadResourcePacks();}
+        if(ticks>338&&reload!=null&&reload.isDone()&&mc.getOverlay()==null){
             reload.join();resources();if(Profiles.get(STYLE).profile().detail()==beforeReload)throw new AssertionError("Resource reload kept stale templates");
             PointClient.rebuild();System.out.println("PACK_RELOAD: PASS cache replaced after full resource reload");
             System.out.println("PACK_RUNTIME: PASS");mc.stop();
         }
-        if(ticks>500)throw new AssertionError("Pack probe timed out");
+        if(ticks>600)throw new AssertionError("Pack probe timed out");
+    }
+    private static PointClient.View turnout(){return PointClient.views.stream().filter(v->v.junction.kind()==Junction.Kind.Y).findFirst().orElseThrow();}
+    private static void checkTurnoutSupports(){
+        int checked=0;
+        for(var view:PointClient.views){
+            double previous=view.previewPosition;view.previewPosition=0;
+            var supports=view.mesh().quads.stream().filter(q->q.part().equals("sleeper")||q.part().startsWith("fastener")).toList();
+            if(supports.isEmpty())throw new AssertionError("No turnout supports in active renderer");
+            for(double position:new double[]{.5,1}){
+                view.previewPosition=position;
+                var other=view.mesh().quads.stream().filter(q->q.part().equals("sleeper")||q.part().startsWith("fastener")).toList();
+                if(!supports.equals(other))throw new AssertionError("Fixed slide beds or bearers move with blades");
+                checked++;
+            }
+            view.previewPosition=previous;view.mesh();
+        }
+        System.out.println("PACK_SUPPORTS: PASS active renderer retains stationary bearers and fittings across blade poses; comparisons="+checked);
+    }
+    private static void supportCamera(Minecraft mc,V3 target,V3 forward,double side,double back,double height){
+        V3 eye=target.add(forward.lateral().mul(side)).sub(forward.mul(back)).add(0,height,0),delta=target.sub(eye);
+        float yaw=(float)Math.toDegrees(Math.atan2(-delta.x(),delta.z())),pitch=(float)-Math.toDegrees(Math.atan2(delta.y(),Math.hypot(delta.x(),delta.z())));
+        mc.getSingleplayerServer().execute(()->mc.getSingleplayerServer().getPlayerList().getPlayers().get(0).connection.teleport(eye.x(),eye.y()-1.62,eye.z(),yaw,pitch));
     }
     private static long counter(String type,String name)throws Exception{var field=Class.forName("org.mtrpoint.client."+type).getDeclaredField(name);field.setAccessible(true);return field.getLong(null);}
     private static void checkPerformance()throws Exception{

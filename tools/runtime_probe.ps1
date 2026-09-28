@@ -20,17 +20,17 @@ if ($RailPack) {
         throw 'Citizons Railway ZIP not found. Supply -RailPackZip or clone the sibling MTR_Citizons_Railway repository.'
     }
 }
-$probeName = if ($RailPack) { if ($MtrOnly) { 'runtime-pack-mtr-only-012' } else { 'runtime-pack-012' } } elseif ($MtrOnly) { 'runtime-mtr-only-012' } elseif ($BaseOnly) { 'runtime-base-012' } elseif ($Connector) { 'runtime-connector-012' } else { 'runtime-probe-012' }
+$probeName = if ($RailPack) { if ($MtrOnly) { 'runtime-pack-mtr-only-013' } else { 'runtime-pack-013' } } elseif ($MtrOnly) { 'runtime-mtr-only-013' } elseif ($BaseOnly) { 'runtime-base-013' } elseif ($Connector) { 'runtime-connector-013' } else { 'runtime-probe-013' }
 $game = Join-Path $project "build/$probeName"
 $null = New-Item -ItemType Directory -Force "$game/mods"
 if (!$MtrOnly) { Copy-Item -LiteralPath "$project/../MTR_Optional_Rail_addon/build/libs/mtr_optional_rail_addon-0.1.0.jar" -Destination "$game/mods" -Force }
-Copy-Item -LiteralPath "$project/build/libs/point-runtime-probe-0.1.2.jar" -Destination "$game/mods" -Force
+Copy-Item -LiteralPath "$project/build/libs/point-runtime-probe-0.1.3.jar" -Destination "$game/mods" -Force
 Copy-Item -LiteralPath "$project/../MTR_BRsignal_addon/libs/MTR-forge-4.0.3+1.20.1.jar" -Destination "$game/mods" -Force
 if (!$BaseOnly -and !$MtrOnly) { Copy-Item -LiteralPath "$project/../MTR_BRsignal_addon/build/libs/mtr_brsignal_addon-0.1.2.jar" -Destination "$game/mods" -Force }
 if ($Connector) {
     Copy-Item -LiteralPath (Get-ChildItem -LiteralPath "$MinecraftRoot/mods" -Filter "Connector-1.0.0-beta.46+1.20.1*.jar" | Select-Object -First 1 -ExpandProperty FullName), "$MinecraftRoot/mods/fabric-api-0.92.6+1.11.14+1.20.1.jar" -Destination "$game/mods" -Force
 }
-Copy-Item -LiteralPath "$project/build/libs/mtr_railway_point_advanced-0.1.2.jar" -Destination "$game/mods" -Force
+Copy-Item -LiteralPath "$project/build/libs/mtr_railway_point_advanced-0.1.3.jar" -Destination "$game/mods" -Force
 $versionName = '1.20.1-Forge'
 $versionDir = "$MinecraftRoot/versions/$versionName"
 $version = Get-Content -LiteralPath "$versionDir/$versionName.json" -Raw | ConvertFrom-Json

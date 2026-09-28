@@ -89,6 +89,7 @@ public final class ThreeWayMesh {
             double bearerTop=(p.detail()==null?p.top()-p.railHeight():p.top()-p.detail().railTop()+p.detail().bearerTop())+s.verticalOffset();
             m.beam(x,y,.09,.09,bearerTop+.01,bearerTop+.05,p.steel(),"stretcher",-1);
         }
+        List<GuardRails.Run> guards=checkRuns(j,s,p,boundary);
         double[] lasts={boundary.aLast(),boundary.thirdLast(),boundary.bLast()};int index=0;
         for(double d:PointMesh.sleeperDistances(lasts[1],s.sleeperSpacing())){
             double blend=Math.max(0,Math.min(1,(d-lasts[1]+2*s.sleeperSpacing())/(2*s.sleeperSpacing())));
@@ -99,7 +100,7 @@ public final class ThreeWayMesh {
                 if(s.sleeperMode()==4){double angle=Math.toRadians(s.sleeperAngle()+(s.sleeperEndAngle()-s.sleeperAngle())*at/extent);n=new V3(n.x()*Math.cos(angle)-n.z()*Math.sin(angle),0,n.x()*Math.sin(angle)+n.z()*Math.cos(angle));}
                 normals.add(n);
             }
-            bearers(m,roads,centers,normals,distances,p,s,index++);
+            bearers(m,roads,centers,normals,distances,p,s,index++,bladeStart,blade,crossings,guards);
         }
         EndSleepers.finish(m,j,s,p,boundary);
         SleeperEdits.finish(m,j,s,p);
@@ -142,7 +143,7 @@ public final class ThreeWayMesh {
         for(var other:crossings)if(other!=crossing){V3 delta=other.frog.center().sub(center);delta=new V3(delta.x(),0,delta.z());if(delta.length()>1e-6)mesh=Mesh.clipAnimated(mesh,center.lerp(other.frog.center(),.5),delta.unit());}
         return mesh;
     }
-    private static void bearers(Mesh out,List<Track> roads,List<V3> centers,List<V3> normals,List<Double> distances,Profile p,PointSettings s,int index){
+    private static void bearers(Mesh out,List<Track> roads,List<V3> centers,List<V3> normals,List<Double> distances,Profile p,PointSettings s,int index,double bladeStart,double blade,List<Crossing> crossings,List<GuardRails.Run> guards){
         V3[] joints=new V3[2];
         for(int outer:new int[]{0,2}){
             V3 middle=centers.get(1),n=normals.get(1);
@@ -162,7 +163,7 @@ public final class ThreeWayMesh {
             V3 c=centers.get(branch),n=normals.get(branch);double half=p.centerOffset()+p.sleeperOverhang(s);Mesh arm=new Mesh();
             double lo=-half,hi=half;
             if(!SleeperEdits.split(s,index))for(int adjacent:new int[]{branch-1,branch+1})if(adjacent>=0&&adjacent<3&&joints[Math.min(branch,adjacent)]!=null){double join=joints[Math.min(branch,adjacent)].sub(c).dot(n);lo=Math.min(lo,join-.4);hi=Math.max(hi,join+.4);}
-            if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(arm,c,n,lo,hi,s,p,index);}
+            if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(arm,c,n,lo,hi,s,p,index,TurnoutFittings.applicable(p));}
             else {double top=p.top()-p.railHeight()+s.verticalOffset();arm.beam(c.add(n.mul(lo)),c.add(n.mul(hi)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
             for(int adjacent:new int[]{branch-1,branch+1})if(!SleeperEdits.split(s,index)&&!SleeperEdits.full(s,index)&&adjacent>=0&&adjacent<3&&joints[Math.min(branch,adjacent)]!=null){
                 V3 other=centers.get(adjacent),on=normals.get(adjacent),joint=joints[Math.min(branch,adjacent)];
@@ -172,9 +173,15 @@ public final class ThreeWayMesh {
             if(p.detail()!=null)for(int sign:new int[]{-1,1}){
                 Track road=roads.get(branch);double d=distances.get(branch);V3 forward=new V3(n.z(),0,-n.x());
                 for(int k=0;k<5;k++){V3 at=rail(road,d,sign,p);double den=road.tangent(d).dot(forward);if(Math.abs(den)<.1)break;d=Math.max(0,Math.min(road.length,d-at.sub(c).dot(forward)/den));}
-                V3 seat=rail(road,d,sign,p);seats.add(seat,road.tangent(d).lateral(),branch==0&&sign<0||branch==2&&sign>0);
+                V3 seat=rail(road,d,sign,p);boolean stock=branch==0&&sign<0||branch==2&&sign>0;seats.add(seat,road.tangent(d).lateral(),stock,stock?road.tangent(d).lateral().mul(sign):null);
             }
         }
-        seats.emit(out,p,s,index);
+        double station=distances.get(1),frog=crossings.stream().mapToDouble(c->(c.frog.sa+c.frog.sb)/2).min().orElse(Double.POSITIVE_INFINITY);
+        String zone=station>=bladeStart-.15&&station<=bladeStart+blade+.15?"blade":Math.abs(station-frog)<Math.max(1,s.sleeperSpacing()*1.75)?"frog":"normal";
+        for(int branch=0;branch<3;branch++){
+            Track road=roads.get(branch);List<GuardRails.Run> own=guards.stream().filter(run->run.road().id.equals(road.id)).toList();
+            TurnoutFittings.guardsAtRow(out,seats,own,centers.get(branch),normals.get(branch),p,s,index);
+        }
+        seats.emitTurnout(out,p,s,index,zone);
     }
 }

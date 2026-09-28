@@ -159,6 +159,11 @@ public final class PointMesh {
     private static void sleepers(Mesh m,Junction j,PointSettings s,Profile p,double extent,YBoundary boundary) {
         if(j.kind()==Junction.Kind.DIAMOND&&s.sleeperMode()==4){VSleepers.diamond(m,j,s,p,extent);return;}
         Track base=j.a();double start=j.kind()==Junction.Kind.Y?0:j.sa()-extent,end=j.kind()==Junction.Kind.Y?extent:j.sa()+extent;
+        double bladeStart=j.kind()==Junction.Kind.Y?TurnoutFrame.start(j,extent):-1;
+        FrogGeometry frog=j.kind()==Junction.Kind.Y?new FrogGeometry(j,s,p,extent):null;
+        double frogAt=frog==null?-1:(frog.sa+frog.sb)/2;
+        double bladeLength=j.kind()==Junction.Kind.Y?(s.bladeLength()>0?s.bladeLength():Math.max(2,Math.min((frogAt-bladeStart)*.65,9))):0;
+        List<GuardRails.Run> guards=j.kind()==Junction.Kind.Y?GuardRails.assembled(j,s,p,null,boundary):List.of();
         int index=0;
         List<Double> rows=j.kind()==Junction.Kind.Y?sleeperDistances(boundary.aLast(),s.sleeperSpacing()):new ArrayList<>();
         if(j.kind()!=Junction.Kind.Y)for(double d=start+s.sleeperSpacing()/2;d<end;d+=s.sleeperSpacing())rows.add(d);
@@ -189,13 +194,16 @@ public final class PointMesh {
                 double near=road.nearest(c);
                 for(int k=0;k<5;k++){V3 at=road.at(near).add(road.tangent(near).lateral().mul(sign*p.centerOffset()));double denominator=road.tangent(near).dot(forward);if(Math.abs(denominator)<.1)break;near=Math.max(0,Math.min(road.length,near-at.sub(c).dot(forward)/denominator));}
                 V3 seat=road.at(near).add(road.tangent(near).lateral().mul(sign*p.centerOffset()));
-                if(Math.abs(seat.sub(c).dot(forward))<.15){seats.add(seat,road.tangent(near).lateral(),stockSide!=0&&sign==(road==j.a()?-stockSide:stockSide));double lateral=seat.sub(c).dot(n);lo=Math.min(lo,lateral-p.sleeperOverhang(s));hi=Math.max(hi,lateral+p.sleeperOverhang(s));}
+                if(Math.abs(seat.sub(c).dot(forward))<.15){boolean stock=stockSide!=0&&sign==(road==j.a()?-stockSide:stockSide);seats.add(seat,road.tangent(near).lateral(),stock,stock?road.tangent(near).lateral().mul(sign):null);double lateral=seat.sub(c).dot(n);lo=Math.min(lo,lateral-p.sleeperOverhang(s));hi=Math.max(hi,lateral+p.sleeperOverhang(s));}
             }
             if(SleeperEdits.split(s,index)){
                 for(Track road:j.tracks())ordinarySleeper(m,road,road.nearest(c),n,s,p,index);
             }else if(p.detail()!=null){
-                if(!p.detail().siding())p.detail().bearer(m,c,n,lo,hi,s,p,index);
-                seats.emit(m,p,s,index);
+                if(!p.detail().siding())p.detail().bearer(m,c,n,lo,hi,s,p,index,TurnoutFittings.applicable(p));
+                String zone=shifted>=bladeStart-.15&&shifted<=bladeStart+bladeLength+.15?"blade":
+                    Math.abs(shifted-frogAt)<Math.max(1,s.sleeperSpacing()*1.75)?"frog":"normal";
+                TurnoutFittings.guardsAtRow(m,seats,guards,c,n,p,s,index);
+                seats.emitTurnout(m,p,s,index,zone);
             }else m.beam(c.add(n.mul(lo)),c.add(n.mul(hi)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);
             index++;
         }

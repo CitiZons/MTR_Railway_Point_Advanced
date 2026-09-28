@@ -19,12 +19,15 @@ final class ResourceModelRegression {
         require(detail.rails().size()==28&&!detail.nativeAtlas(),"Custom section did not load its detailed profile");
         require(!loaded.attachments().isEmpty()&&!loaded.supports().isEmpty(),"Ballast/support roles missing");
         require(detail.bearers().size()>100&&detail.fittings().size()>300,"Detailed supports did not load");
+        var fittingLods=new ArrayList<List<Mesh.Quad>>();
         for(String name:List.of("mid","far")){
             String lod=descriptor.getAsJsonObject("lod").getAsJsonObject(name).get("model").getAsString();JsonObject variant=descriptor.deepCopy();variant.addProperty("model",lod);
             var lower=ProfileModel.read(variant,lod,"",true,reader);
             require(lower.detail().rails().equals(detail.rails()),"LOD switch changes the steel section");
             require(lower.detail().fittings().size()<detail.fittings().size()*.2,"Distant fittings are still too dense");
+            fittingLods.add(lower.detail().fittings());
         }
+        SupportGeometryRegression.run(detail,fittingLods.get(0),fittingLods.get(1));
         for(var q:loaded.attachments()){require(q.uv()!=null&&q.uv().size()==8,"Attachment UV discarded");
             for(int i=0;i<8;i+=2)require(q.uv().get(i)>=.67&&q.uv().get(i+1)>=.507,"Ballast sampled outside atlas region");}
         var p=new Profile(1.435,.26428,.068,.14,.165,Profile.STEEL,Profile.TIMBER,"test",true,detail);var mesh=new Mesh();

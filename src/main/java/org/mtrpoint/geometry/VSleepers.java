@@ -7,6 +7,10 @@ public final class VSleepers {
     private record Arm(Track road,double distance,V3 center,V3 normal) {}
     /** One bearer family across every road, including diagonals inside a scissors. */
     public static void across(Mesh out,List<Track> tracks,V3 spine,V3 forward,double angle,PointSettings s,Profile p,int index){
+        across(out,tracks,spine,forward,angle,s,p,index,List.of());
+    }
+    /** The guard list is the final assembled world list; each run is supported only by its own road arm. */
+    public static void across(Mesh out,List<Track> tracks,V3 spine,V3 forward,double angle,PointSettings s,Profile p,int index,List<GuardRails.Run> guards){
         V3 transverse=forward.lateral();var arms=new ArrayList<Arm>();
         for(Track original:tracks){
             Track road=original;double d=road.nearest(spine);
@@ -35,7 +39,7 @@ public final class VSleepers {
             double lo=-half,hi=half;
             if(!SleeperEdits.split(s,index))for(V3 limit:new V3[]{left,right})if(limit!=null){double at=limit.sub(c).dot(n);lo=Math.min(lo,at-.5);hi=Math.max(hi,at+.5);}
             Mesh arm=new Mesh();
-            if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(arm,c,n,lo,hi,s,p,index);}
+            if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(arm,c,n,lo,hi,s,p,index,TurnoutFittings.applicable(p));}
             else {double top=p.top()-p.railHeight()+s.verticalOffset();arm.beam(c.add(n.mul(lo)),c.add(n.mul(hi)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
             // Both arms use the same bisector, so their full widths meet without a step.
             for(int side:new int[]{-1,1}){V3 limit=side<0?left:right;if(limit==null||SleeperEdits.split(s,index)||SleeperEdits.full(s,index))continue;
@@ -45,10 +49,12 @@ public final class VSleepers {
             out.quads.addAll(arm.quads);
             if(p.detail()!=null)for(int sign:new int[]{-1,1}){
                 V3 seat=a.road.at(d).add(a.road.tangent(d).lateral().mul(sign*p.centerOffset()));
-                seats.add(seat,a.road.tangent(d).lateral(),i==0&&sign<0||i==arms.size()-1&&sign>0);
+                boolean stock=i==0&&sign<0||i==arms.size()-1&&sign>0;seats.add(seat,a.road.tangent(d).lateral(),stock,stock?a.road.tangent(d).lateral().mul(sign):null);
             }
+            if(p.detail()!=null){List<GuardRails.Run> own=guards.stream().filter(run->run.road().id.equals(a.road.id)).toList();
+                if(!own.isEmpty())TurnoutFittings.guardsAtRow(out,seats,own,c,n,p,s,index);}
         }
-        seats.emit(out,p,s,index);
+        seats.emitTurnout(out,p,s,index,"frog");
     }
     public static void diamond(Mesh out,Junction j,PointSettings s,Profile p,double extent){
         Track a=j.a(),b=j.b();double ca=j.sa(),cb=j.sb();
@@ -58,10 +64,11 @@ public final class VSleepers {
         // Project the spacing ONCE onto the common spine. Averaging equal road arc
         // lengths and then projecting again halved the pitch at a right-angle crossing.
         double step=s.sleeperSpacing()*projection,limit=extent*projection;
+        List<GuardRails.Run> guards=GuardRails.assembled(j,s,p,null,null);
         for(double d=-limit+step/2;d<limit;d+=step){
             double along=d+s.sleeperShifts().getOrDefault(index,0D)*projection;
             double angle=Math.toRadians(s.sleeperAngle()+(s.sleeperEndAngle()-s.sleeperAngle())*(d+limit)/(2*limit));
-            across(family,List.of(a,b),j.center().add(forward.mul(along)),forward,angle,s,p,index++);
+            across(family,List.of(a,b),j.center().add(forward.mul(along)),forward,angle,s,p,index++,guards);
         }
         out.quads.addAll(SurfaceUnion.build(family).quads);
     }
@@ -86,7 +93,7 @@ public final class VSleepers {
             double half=p.centerOffset()+p.sleeperOverhang(s),join=joint.sub(c).dot(n);
             double lo=SleeperEdits.split(s,index)?-half:Math.min(-half,join-.4),hi=SleeperEdits.split(s,index)?half:Math.max(half,join+.4);
             Mesh arm=new Mesh();
-            if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(arm,c,n,lo,hi,s,p,index);}
+            if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(arm,c,n,lo,hi,s,p,index,TurnoutFittings.applicable(p));}
             else {double top=Math.max(.03,p.top()-p.railHeight())+s.verticalOffset();arm.beam(c.add(n.mul(lo)),c.add(n.mul(hi)),s.sleeperWidth(),s.sleeperWidth(),top-s.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
             for(var q:arm.quads)if(SleeperEdits.split(s,index)||SleeperEdits.full(s,index))out.quad(q);else Mesh.clip(out,q,joint,branch==0?cut:cut.mul(-1));
             V3 forward=new V3(n.z(),0,-n.x());
@@ -94,10 +101,17 @@ public final class VSleepers {
                 double near=branch==0?d:otherDistance;
                 for(int i=0;i<5;i++){V3 seat=road.at(near).add(road.tangent(near).lateral().mul(sign*p.centerOffset()));double denom=road.tangent(near).dot(forward);if(Math.abs(denom)<.1)break;near=Math.max(0,Math.min(road.length,near-seat.sub(c).dot(forward)/denom));}
                 V3 seat=road.at(near).add(road.tangent(near).lateral().mul(sign*p.centerOffset()));
-                if(p.detail()!=null)seats.add(seat,road.tangent(near).lateral(),sign==(branch==0?-stockSide:stockSide));
+                if(p.detail()!=null){boolean stock=sign==(branch==0?-stockSide:stockSide);seats.add(seat,road.tangent(near).lateral(),stock,stock?road.tangent(near).lateral().mul(sign):null);}
             }
         }
-        seats.emit(out,p,s,index);
+        double bladeStart=TurnoutFrame.start(j,extent);FrogGeometry crossing=new FrogGeometry(j,s,p,extent);double frog=(crossing.sa+crossing.sb)/2;
+        double blade=s.bladeLength()>0?s.bladeLength():Math.max(2,Math.min((frog-bladeStart)*.65,9));
+        String zone=d>=bladeStart-.15&&d<=bladeStart+blade+.15?"blade":Math.abs(d-frog)<Math.max(1,s.sleeperSpacing()*1.75)?"frog":"normal";
+        List<GuardRails.Run> guards=GuardRails.assembled(j,s,p,null,null);
+        for(int branch=0;branch<2;branch++){Track road=branch==0?j.a():j.b();double at=branch==0?d:otherDistance;V3 center=road.at(at),normal=rotate(road.tangent(at).lateral(),angle);
+            List<GuardRails.Run> own=guards.stream().filter(run->run.road().id.equals(road.id)).toList();
+            TurnoutFittings.guardsAtRow(out,seats,own,center,normal,p,s,index);}
+        seats.emitTurnout(out,p,s,index,zone);
     }
     public static double station(Track road,V3 joint,double initial,double angle){
         double d=Math.max(0,Math.min(road.length,initial));

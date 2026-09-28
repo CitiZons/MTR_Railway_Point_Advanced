@@ -132,6 +132,7 @@ public record ScissorsLayout(Junction crossing,List<Junction> turnouts,List<Trac
         double reach=0;for(Track road:crossing.tracks())for(double plane:new double[]{lo,hi})reach=Math.max(reach,Math.abs(intersection(road,plane)-road.nearest(crossing.center())));
         Junction expanded=new Junction(crossing.id(),Junction.Kind.DIAMOND,crossing.a(),crossing.b(),crossing.center(),crossing.sa(),crossing.sb(),reach+1);
         DiamondGeometry.buildScissors(mesh,this,settings,p);
+        List<GuardRails.Run> guards=GuardRails.assembled(crossing,settings,p,this,null);
         int index=0;double length=hi-lo;
         for(double local:PointMesh.sleeperDistances(Math.max(0,length-settings.sleeperSpacing()/2),settings.sleeperSpacing())){
             double along=lo+local+settings.sleeperShifts().getOrDefault(index,0D);V3 target=crossing.center().add(axis.mul(along));
@@ -147,9 +148,9 @@ public record ScissorsLayout(Junction crossing,List<Junction> turnouts,List<Trac
                 double side=seat.sub(center).dot(n);min=Math.min(min,side-p.sleeperOverhang(settings));max=Math.max(max,side+p.sleeperOverhang(settings));
             }
             if(settings.sleeperMode()==4){
-                VSleepers.across(mesh,tracks,center,axis,angle,settings,p,index);
+                VSleepers.across(mesh,tracks,center,axis,angle,settings,p,index,guards);
             }
-            else if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(mesh,center,n,min,max,settings,p,index);for(V3 seat:seats)p.detail().fitting(mesh,seat,n,settings,p,index);}
+            else if(p.detail()!=null){if(!p.detail().siding())p.detail().bearer(mesh,center,n,min,max,settings,p,index,TurnoutFittings.applicable(p));var fittings=new FittingSeats();for(V3 seat:seats)fittings.add(seat,n,false);TurnoutFittings.guardsAtRow(mesh,fittings,guards,center,n,p,settings,index);fittings.emitTurnout(mesh,p,settings,index,"frog");}
             else {double top=p.top()-p.railHeight()+settings.verticalOffset();mesh.beam(center.add(n.mul(min)),center.add(n.mul(max)),settings.sleeperWidth(),settings.sleeperWidth(),top-settings.sleeperHeight(),top,p.sleeper(),"sleeper",index);}
             index++;
         }
