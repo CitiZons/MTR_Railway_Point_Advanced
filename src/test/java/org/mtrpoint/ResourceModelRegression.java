@@ -54,7 +54,7 @@ final class ResourceModelRegression {
             require(Files.isDirectory(assets),"CITIZONS_RAILWAY_PACK must point to a resource pack directory containing assets: "+configured);
             return assets;
         }
-        for(String root:List.of("../resourcepacks/Citizons_Railway","../MTR_Citizons_Railway/resourcepacks/Citizons_Railway")){
+        for(String root:List.of("../MTR_Citizons_Railway/resourcepacks/Citizons_Railway")){
             Path assets=Path.of(root).resolve("assets");if(Files.isDirectory(assets))return assets;
         }
         return null;

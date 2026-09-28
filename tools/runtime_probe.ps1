@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
 if ($RailPack) {
     if (!$RailPackZip) {
-        $RailPackZip = @("$project/../resourcepacks/Citizons_Railway.zip", "$project/../MTR_Citizons_Railway/dist/Citizons_Railway.zip") |
+        $RailPackZip = @("$project/../MTR_Citizons_Railway/dist/Citizons_Railway.zip") |
             Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
     }
     if (!$RailPackZip -or !(Test-Path -LiteralPath $RailPackZip -PathType Leaf)) {

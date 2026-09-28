@@ -132,9 +132,9 @@ Java 17：
 
 `build` 包含不启动游戏的几何回归检查；输出示例 OBJ 到 `build/previews/`。运行时测试在 `build/runtime-*` 中创建独立环境，不复制用户存档。`-World` 会在那里生成一次性平坦测试世界。
 
-构建仍需 `../MTR_BRsignal_addon/libs/MTR-forge-4.0.3+1.20.1.jar` 中的 MTR 编译依赖。资源包专项回归优先读取环境变量 `CITIZONS_RAILWAY_PACK` 指向的包目录（其中包含 `assets`），否则依次寻找 `../resourcepacks/Citizons_Railway` 与 `../MTR_Citizons_Railway/resourcepacks/Citizons_Railway`。没有外部包时明确输出 `RESOURCE_MODELS: SKIPPED`；独立的旋转轴和连续截面检查仍执行。显式配置错误或已找到的包不完整会失败，不会按通过处理。
+构建仍需 `../MTR_BRsignal_addon/libs/MTR-forge-4.0.3+1.20.1.jar` 中的 MTR 编译依赖。资源包专项回归优先读取环境变量 `CITIZONS_RAILWAY_PACK` 指向的包目录（其中包含 `assets`），否则读取同级材质包子项目的 `../MTR_Citizons_Railway/resourcepacks/Citizons_Railway`。没有外部包时明确输出 `RESOURCE_MODELS: SKIPPED`；独立的旋转轴和连续截面检查仍执行。显式配置错误或已找到的包不完整会失败，不会按通过处理。
 
-资源包游戏探针使用 `tools/runtime_probe.ps1 -RailPack -BaseOnly`（MTR + Optional Rail）或 `-RailPack -MtrOnly`。ZIP 自动寻找旧工作区位置或同级材质包仓库的 `dist/Citizons_Railway.zip`，也可通过 `-RailPackZip` 指定。运行脚本的 `-MinecraftRoot`、`-Java` 及可选联动模组路径需匹配本机已安装环境。
+资源包游戏探针使用 `tools/runtime_probe.ps1 -RailPack -BaseOnly`（MTR + Optional Rail）或 `-RailPack -MtrOnly`。ZIP 默认读取同级材质包子项目的 `dist/Citizons_Railway.zip`，也可通过 `-RailPackZip` 指定。运行脚本的 `-MinecraftRoot`、`-Java` 及可选联动模组路径需匹配本机已安装环境。
 
 `tools/generate_assets.py` 生成本项目原创小贴图并检查三语键一致，需要 Pillow；翻译直接维护在 `lang/*.json`，脚本不会覆盖。`tools/render_preview.py` 由 Blender 后台运行，生成可继续编辑的 `.blend` 和几何预览 PNG。模型的权威来源是程序生成器，手工修改示例 `.blend` 不会自动反写游戏内参数。
 
