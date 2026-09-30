@@ -128,7 +128,7 @@ public final class PointRenderer {
         RailCellCache.finish();
     }
     public static void drawGpu(net.minecraftforge.client.event.RenderLevelStageEvent e){
-        if(e.getStage()!=net.minecraftforge.client.event.RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS)return;
+        if(e.getStage()!=net.minecraftforge.client.event.RenderLevelStageEvent.Stage.AFTER_ENTITIES)return;
         var mc=net.minecraft.client.Minecraft.getInstance();if(mc.level==null||mc.player==null||mc.screen instanceof BlueprintScreen||mc.screen instanceof PointSelectionScreen)return;
         RailCellCache.draw(e);
         if(knownViews!=PointClient.views){

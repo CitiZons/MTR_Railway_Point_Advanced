@@ -333,3 +333,9 @@ BRsignal 0.1.2 在不带 Connector 的纯 Forge 测试世界启动时，其现�
 本项目只读 MTR 曲线、样式、客户端路径以及 BRsignal 公布的快照。Mixin 只观察 Simulator tick、读取字段、替换轨道外观回调并提交生成网格。没有写入 MTR 图连接、PathData、寻路结果、BR 授权、轨道可视化映射或信号状态。外观参数保存在本 Mod 独立的 `mtrpoint_appearance` SavedData 中。
 
 正式交付文件：`build/libs/mtr_railway_point_advanced-0.1.2.jar`。不要安装 `point-runtime-probe-0.1.2.jar` 到真实游戏。真实客户端 mods 目录和用户存档未修改。
+## 0.1.3 光影兼容修复（2026-09-30）
+
+- Point Advanced 的世界轨道 GPU 网格改用 Minecraft 标准 `RenderType.entityCutoutNoCull`，并从 `AFTER_TRANSLUCENT_BLOCKS` 调整到 `AFTER_ENTITIES` 提交，避免 Iris/Oculus 光影只接收阴影而丢失实体颜色输出。
+- Optional Rail 采样适配器在反射接口不匹配或运行时异常时回退到 MTR 原生 `RailMath`，不再让倾斜钢轨和道砟整段消失。
+- Point Advanced 版本保持 0.1.3；Optional Rail 版本升至 0.1.1；网络协议保持 3。
+- Point Advanced 完整构建及几何回归通过；Optional Rail 构建及 707 项回归通过。未修改 `citizons_railway` 材质包。

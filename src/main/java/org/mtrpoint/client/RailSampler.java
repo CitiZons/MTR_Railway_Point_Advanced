@@ -14,12 +14,14 @@ public final class RailSampler {
     private static java.lang.reflect.Field frameField;
     private static java.lang.reflect.Method renderMethod,nodeMethod,bankMethod,cantAMethod,cantBMethod,tangentAMethod,tangentBMethod;
     private static boolean initialized;
+    private static boolean optionalAdapterBroken;
+    private static boolean optionalAdapterWarning;
     public static long sampleBuilds;
     public record Cell(V3 a,V3 b) {}
     public static List<Cell> cells(Rail rail,double interval){
         var cells=new ArrayList<Cell>();RailMath.RenderRail callback=(x1,z1,x2,z2,x3,z3,x4,z4,y1,y2)->cells.add(new Cell(new V3(x1,y1,z1),new V3(x3,y2,z3)));
-        try{initialize();if(renderMethod!=null)renderMethod.invoke(null,rail,callback,interval,0F,0F);else rail.railMath.render(callback,interval,0,0);}
-        catch(ReflectiveOperationException ex){org.mtrpoint.PointMod.LOG.warn("Could not align rail supports",ex);return List.of();}return cells;
+        try{initialize();if(renderMethod!=null&&!optionalAdapterBroken)renderMethod.invoke(null,rail,callback,interval,0F,0F);else rail.railMath.render(callback,interval,0,0);}
+        catch(ReflectiveOperationException ex){warnOptionalFailure(ex);rail.railMath.render(callback,interval,0,0);}return cells;
     }
     public static double currentBank(){
         try{initialize();if(frameField!=null){Object frame=((ThreadLocal<?>)frameField.get(null)).get();if(frame!=null)return Math.toRadians((((Number)cantAMethod.invoke(frame)).doubleValue()+((Number)cantBMethod.invoke(frame)).doubleValue())/2);}}
@@ -31,7 +33,8 @@ public final class RailSampler {
         catch(ReflectiveOperationException ex){throw new IllegalStateException(ex);}
         try{render.run();}finally{if(local!=null&&saved!=null)local.set(saved);}
     }
-    private static void initialize()throws ReflectiveOperationException{if(initialized)return;if(net.minecraftforge.fml.ModList.get().isLoaded("mtr_optional_rail_addon")){Class<?> geometry=Class.forName("org.mtroptional.client.RailGeometry");frameField=geometry.getField("FRAME");renderMethod=geometry.getMethod("render",Rail.class,RailMath.RenderRail.class,double.class,float.class,float.class);nodeMethod=Class.forName("org.mtroptional.client.ClientNodes").getMethod("get",long.class);Class<?> frame=Class.forName("org.mtroptional.client.RailGeometry$Frame");bankMethod=frame.getMethod("bank",double.class,double.class,double.class);cantAMethod=frame.getMethod("cantA");cantBMethod=frame.getMethod("cantB");tangentAMethod=frame.getMethod("ta");tangentBMethod=frame.getMethod("tb");}initialized=true;}
+    private static void initialize()throws ReflectiveOperationException{if(initialized)return;if(net.minecraftforge.fml.ModList.get().isLoaded("mtr_optional_rail_addon")){try{Class<?> geometry=Class.forName("org.mtroptional.client.RailGeometry");frameField=geometry.getField("FRAME");renderMethod=geometry.getMethod("render",Rail.class,RailMath.RenderRail.class,double.class,float.class,float.class);nodeMethod=Class.forName("org.mtroptional.client.ClientNodes").getMethod("get",long.class);Class<?> frame=Class.forName("org.mtroptional.client.RailGeometry$Frame");bankMethod=frame.getMethod("bank",double.class,double.class,double.class);cantAMethod=frame.getMethod("cantA");cantBMethod=frame.getMethod("cantB");tangentAMethod=frame.getMethod("ta");tangentBMethod=frame.getMethod("tb");}catch(ReflectiveOperationException ex){optionalAdapterBroken=true;warnOptionalFailure(ex);}}initialized=true;}
+    private static void warnOptionalFailure(Throwable ex){if(!optionalAdapterWarning){optionalAdapterWarning=true;org.mtrpoint.PointMod.LOG.warn("Optional Rail adapter unavailable; using native MTR rail geometry",ex);}}
     public static void clear(){SAMPLES.clear();MODEL_FRAMES.clear();}
     public static void clearModels(){MODEL_FRAMES.clear();}
     public static RailSweep sweep(Rail rail,org.mtr.mod.resource.RailResource resource,V3 a,V3 b){
@@ -47,7 +50,7 @@ public final class RailSampler {
     public static Track sample(Rail rail){
         var ends=new ObjectArraySet<Position>();rail.writePositions(ends);if(ends.size()!=2)return null;Position[] p=ends.toArray(new Position[0]);
         Object na=null,nb=null;
-        try{initialize();if(nodeMethod!=null){na=nodeMethod.invoke(null,net.minecraft.core.BlockPos.asLong((int)p[0].getX(),(int)p[0].getY(),(int)p[0].getZ()));nb=nodeMethod.invoke(null,net.minecraft.core.BlockPos.asLong((int)p[1].getX(),(int)p[1].getY(),(int)p[1].getZ()));}}catch(ReflectiveOperationException ex){return null;}
+        try{initialize();if(nodeMethod!=null&&!optionalAdapterBroken){na=nodeMethod.invoke(null,net.minecraft.core.BlockPos.asLong((int)p[0].getX(),(int)p[0].getY(),(int)p[0].getZ()));nb=nodeMethod.invoke(null,net.minecraft.core.BlockPos.asLong((int)p[1].getX(),(int)p[1].getY(),(int)p[1].getZ()));}}catch(ReflectiveOperationException ex){warnOptionalFailure(ex);}
         Sample cached=SAMPLES.get(rail.getHexId());
         if(cached!=null&&cached.rail==rail&&Objects.equals(cached.nodeA,na)&&Objects.equals(cached.nodeB,nb))return cached.track;
         sampleBuilds++;
@@ -56,7 +59,7 @@ public final class RailSampler {
         var points=new ArrayList<V3>();var banks=new ArrayList<Bank>();double[] cumulative={0};
         RailMath.RenderRail callback=(x1,z1,x2,z2,x3,z3,x4,z4,y1,y2)->{V3 a=new V3(x1,y1,z1),b=new V3(x3,y2,z3);if(points.isEmpty())points.add(a);points.add(b);double end=cumulative[0]+a.distance(b);if(frameField!=null)try{Object frame=((ThreadLocal<?>)frameField.get(null)).get();if(frame!=null&&(Math.abs(((Number)cantAMethod.invoke(frame)).doubleValue())>1e-8||Math.abs(((Number)cantBMethod.invoke(frame)).doubleValue())>1e-8))banks.add(new Bank(cumulative[0],end,frame));}catch(ReflectiveOperationException ignored){}cumulative[0]=end;};
         boolean optional=net.minecraftforge.fml.ModList.get().isLoaded("mtr_optional_rail_addon");
-        if(optional)try{renderMethod.invoke(null,rail,callback,.4,0F,0F);}catch(ReflectiveOperationException ex){org.mtrpoint.PointMod.LOG.warn("Optional Rail geometry adapter failed",ex);return null;}
+        if(optional&&!optionalAdapterBroken)try{renderMethod.invoke(null,rail,callback,.4,0F,0F);}catch(ReflectiveOperationException ex){warnOptionalFailure(ex);rail.railMath.render(callback,.4,0,0);}
         else rail.railMath.render(callback,.4,0,0);
         if(points.size()<2)return null;Track track=new Track(rail.getHexId(),node(p[0]),node(p[1]),points);SAMPLES.put(track.id,new Sample(track,List.copyOf(banks),rail,na,nb));return track;
     }
@@ -102,8 +105,8 @@ public final class RailSampler {
             found[0]=Math.min(found[0],lo);found[1]=Math.max(found[1],hi);
         };
         try{
-            for(double interval:intervals(sample.rail,settings)){if(renderMethod!=null)renderMethod.invoke(null,sample.rail,callback,interval,0F,0F);else sample.rail.railMath.render(callback,interval,0,0);}
-        }catch(ReflectiveOperationException ex){org.mtrpoint.PointMod.LOG.warn("Could not sample the crossing end cells",ex);return new double[]{from-.5,to+.5};}
+            for(double interval:intervals(sample.rail,settings)){if(renderMethod!=null&&!optionalAdapterBroken)renderMethod.invoke(null,sample.rail,callback,interval,0F,0F);else sample.rail.railMath.render(callback,interval,0,0);}
+        }catch(ReflectiveOperationException ex){warnOptionalFailure(ex);return new double[]{from-.5,to+.5};}
         return found[0]<=found[1]?found:new double[]{from-.5,to+.5};
     }
     /** The station window of a diamond crossing per road: the native cells the renderer hides, so
@@ -140,8 +143,8 @@ public final class RailSampler {
             if(center<=nominal){found[0]=Math.max(found[0],Math.max(track.nearest(a),track.nearest(b)));found[1]=Math.max(found[1],center);}
         };
         try{
-            for(double interval:intervals){if(renderMethod!=null)renderMethod.invoke(null,rail,callback,interval,0F,0F);else rail.railMath.render(callback,interval,0,0);}
-        }catch(ReflectiveOperationException ex){org.mtrpoint.PointMod.LOG.warn("Could not sample the turnout end cells",ex);return new double[]{nominal,fallbackLast};}
+            for(double interval:intervals){if(renderMethod!=null&&!optionalAdapterBroken)renderMethod.invoke(null,rail,callback,interval,0F,0F);else rail.railMath.render(callback,interval,0,0);}
+        }catch(ReflectiveOperationException ex){warnOptionalFailure(ex);return new double[]{nominal,fallbackLast};}
         return found[1]<0?new double[]{nominal,fallbackLast}:found;
     }
     public static Mesh bank(Mesh mesh,Junction j){return bank(mesh,j,j.tracks());}
@@ -166,8 +169,8 @@ public final class RailSampler {
             V3 a=new V3(x1,y1,z1),b=new V3(x3,y2,z3);rawCells.add(new Cell(a,b));
             frames.add(currentSweep(a,b));
         };
-        try{initialize();if(renderMethod!=null)renderMethod.invoke(null,sample.rail,callback,resource[0].getRepeatInterval(),0F,0F);else sample.rail.railMath.render(callback,resource[0].getRepeatInterval(),0,0);}
-        catch(ReflectiveOperationException ex){org.mtrpoint.PointMod.LOG.warn("Could not sample model banking",ex);return null;}
+        try{initialize();if(renderMethod!=null&&!optionalAdapterBroken)renderMethod.invoke(null,sample.rail,callback,resource[0].getRepeatInterval(),0F,0F);else sample.rail.railMath.render(callback,resource[0].getRepeatInterval(),0,0);}
+        catch(ReflectiveOperationException ex){warnOptionalFailure(ex);return null;}
         if(frames.isEmpty())return null;
         // RailMath restarts its repeat phase at the second horizontal arc. Its first arc can
         // overrun that restart, so raw callbacks do not always share endpoints. Keep their

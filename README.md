@@ -12,6 +12,10 @@
 
 本版包含平顶岔枕与完整护轨／翼轨承座修复，配套 [Citizons Railway 0.1.0](https://github.com/CitiZons/MTR_Citizons_Railway/releases/tag/v0.1.0)。发布清单见 [CHANGELOG.md](CHANGELOG.md)。
 
+本版同时包含光影兼容修复：世界轨道网格直接使用 Minecraft 标准实体裁剪渲染类型，并在实体渲染阶段提交，使 Iris/Oculus 能正常输出钢轨、道砟、道岔和倾斜轨道材质。与 Optional Rail 0.1.1 联用时，超高采样接口异常会回退到 MTR 原生轨道几何。版本号仍为 0.1.3，网络协议仍为 3。
+
+This version also includes shader compatibility fixes: world rail meshes use Minecraft's standard entity cutout render type and are submitted during the entity stage, allowing Iris/Oculus to output rail, ballast, turnout and banked-track materials. With Optional Rail 0.1.1, failures in the cant sampling adapter fall back to native MTR rail geometry. The version remains 0.1.3 and the network protocol remains 3.
+
 - 多轨岔枕平顶化，保留底面与倒角，修复重叠黑纹；普通轨枕保留中央下凹。
 - 尖轨固定滑床板、基本轨外侧夹持、岔心共用底板。
 - 护轨、翼轨均与相邻运行轨共用承座，增加外侧加强支架和螺栓；覆盖 Y 普通／V 形岔枕及三开，沿用三个距离档位。
