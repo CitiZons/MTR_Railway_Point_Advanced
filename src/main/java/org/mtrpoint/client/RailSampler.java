@@ -90,6 +90,29 @@ public final class RailSampler {
         for(Sample sample:SAMPLES.values())if(sample.track!=null)out.add(sample.track);
         return List.copyOf(out);
     }
+    static List<Track> styledTracks(String style){
+        style=Profiles.canonical(style);var out=new ArrayList<Track>();
+        for(Sample sample:SAMPLES.values())for(String raw:sample.rail.getStyles())if(Profiles.canonical(raw).equals(style)){out.add(sample.track);break;}
+        return List.copyOf(out);
+    }
+    record EndpointSlice(RailSweep sweep,double from,double to) {}
+    static List<EndpointSlice> endpointSlices(org.mtr.mod.resource.RailResource resource,Track track,boolean start,double length){
+        var frames=modelFrames(track.id,resource.getId());double reach=length;var out=new ArrayList<EndpointSlice>();
+        if(frames==null||frames.frames.isEmpty()){
+            V3 tip=track.at(start?0:track.length),inside=track.at(start?reach:track.length-reach),f=inside.sub(tip).unit();
+            return List.of(new EndpointSlice(new RailSweep(tip,inside,f,f,0,0),0,reach));
+        }
+        for(int i=0;i<frames.frames.size();i++){
+            RailSweep raw=frames.frames.get(i);double sa=track.nearest(raw.a()),sb=track.nearest(raw.b()),lo=Math.min(sa,sb),hi=Math.max(sa,sb);
+            double physicalFrom=start?lo:track.length-hi,physicalTo=start?hi:track.length-lo;if(physicalFrom>=reach||physicalTo<=0)continue;
+            double from=Math.max(0,physicalFrom),to=Math.min(reach,physicalTo),t0=(from-physicalFrom)/Math.max(1e-9,physicalTo-physicalFrom),t1=(to-physicalFrom)/Math.max(1e-9,physicalTo-physicalFrom);
+            if(!start){double q0=1-t1,q1=1-t0;t0=q0;t1=q1;}
+            V3 a=raw.a().lerp(raw.b(),t0),b=raw.a().lerp(raw.b(),t1),ta=raw.forward(t0),tb=raw.forward(t1);double ca=raw.cantA()+(raw.cantB()-raw.cantA())*t0,cb=raw.cantA()+(raw.cantB()-raw.cantA())*t1;
+            if(!start){V3 p=a;a=b;b=p;p=ta;ta=tb.mul(-1);tb=p.mul(-1);double c=ca;ca=-cb;cb=-c;}
+            out.add(new EndpointSlice(new RailSweep(a,b,ta,tb,ca,cb),from,to));
+        }
+        out.sort(Comparator.comparingDouble(EndpointSlice::from));return List.copyOf(out);
+    }
     /** The native repeat cells whose centre lies inside a station window, returned as the outward
      *  window the modded mesh has to cover: a cell the renderer hides is then always drawn by the
      *  mod, so the hand-over can never leave a hole. Without sampled cells (no rail around, or a

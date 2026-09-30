@@ -10,6 +10,7 @@ public final class Regression {
     private static void require(boolean pass,String why){if(!pass)throw new AssertionError(why);}
     public static void main(String[] args)throws Exception{
         ResourceModelRegression.run();
+        org.mtrpoint.client.ContinuousGuardRegression.run();
         org.mtrpoint.client.ReviewFixRegression.run();
         org.mtrpoint.client.ScreenshotGeometryRegression.run();
         org.mtrpoint.client.SavedWingRegression.run();

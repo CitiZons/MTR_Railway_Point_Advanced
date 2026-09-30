@@ -7,11 +7,12 @@ param(
     [switch]$MtrOnly,
     [string]$LayoutWorld = '',
     [switch]$RailPack,
+    [switch]$GuardPack,
     [string]$RailPackZip = ''
 )
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
-if ($RailPack) {
+if ($RailPack -or $GuardPack) {
     if (!$RailPackZip) {
         $RailPackZip = @("$project/../MTR_Citizons_Railway/dist/Citizons_Railway.zip") |
             Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
@@ -20,17 +21,17 @@ if ($RailPack) {
         throw 'Citizons Railway ZIP not found. Supply -RailPackZip or clone the sibling MTR_Citizons_Railway repository.'
     }
 }
-$probeName = if ($RailPack) { if ($MtrOnly) { 'runtime-pack-mtr-only-013' } else { 'runtime-pack-013' } } elseif ($MtrOnly) { 'runtime-mtr-only-013' } elseif ($BaseOnly) { 'runtime-base-013' } elseif ($Connector) { 'runtime-connector-013' } else { 'runtime-probe-013' }
+$probeName = if ($GuardPack) { 'runtime-guard-pack-014' } elseif ($RailPack) { if ($MtrOnly) { 'runtime-pack-mtr-only-014' } else { 'runtime-pack-014' } } elseif ($MtrOnly) { 'runtime-mtr-only-014' } elseif ($BaseOnly) { 'runtime-base-014' } elseif ($Connector) { 'runtime-connector-014' } else { 'runtime-probe-014' }
 $game = Join-Path $project "build/$probeName"
 $null = New-Item -ItemType Directory -Force "$game/mods"
 if (!$MtrOnly) { Copy-Item -LiteralPath "$project/../MTR_Optional_Rail_addon/build/libs/mtr_optional_rail_addon-0.1.0.jar" -Destination "$game/mods" -Force }
-Copy-Item -LiteralPath "$project/build/libs/point-runtime-probe-0.1.3.jar" -Destination "$game/mods" -Force
+Copy-Item -LiteralPath "$project/build/libs/point-runtime-probe-0.1.4.jar" -Destination "$game/mods" -Force
 Copy-Item -LiteralPath "$project/../MTR_BRsignal_addon/libs/MTR-forge-4.0.3+1.20.1.jar" -Destination "$game/mods" -Force
 if (!$BaseOnly -and !$MtrOnly) { Copy-Item -LiteralPath "$project/../MTR_BRsignal_addon/build/libs/mtr_brsignal_addon-0.1.2.jar" -Destination "$game/mods" -Force }
 if ($Connector) {
     Copy-Item -LiteralPath (Get-ChildItem -LiteralPath "$MinecraftRoot/mods" -Filter "Connector-1.0.0-beta.46+1.20.1*.jar" | Select-Object -First 1 -ExpandProperty FullName), "$MinecraftRoot/mods/fabric-api-0.92.6+1.11.14+1.20.1.jar" -Destination "$game/mods" -Force
 }
-Copy-Item -LiteralPath "$project/build/libs/mtr_railway_point_advanced-0.1.3.jar" -Destination "$game/mods" -Force
+Copy-Item -LiteralPath "$project/build/libs/mtr_railway_point_advanced-0.1.4.jar" -Destination "$game/mods" -Force
 $versionName = '1.20.1-Forge'
 $versionDir = "$MinecraftRoot/versions/$versionName"
 $version = Get-Content -LiteralPath "$versionDir/$versionName.json" -Raw | ConvertFrom-Json
@@ -59,6 +60,7 @@ $argsList.Add('-Xmx3G')
 $argsList.Add('-Dmixin.debug.export=true')
 if ($World) { $argsList.Add('-DpointProbeWorld=true') }
 if ($RailPack) { $argsList.Add('-DpointProbePack=true'); if (!$World) { $argsList.Add('-DpointProbeWorld=true') } }
+if ($GuardPack) { $argsList.Add('-DpointProbeGuard=true'); if (!$World) { $argsList.Add('-DpointProbeWorld=true') } }
 if ($LayoutWorld) { $argsList.Add('-DpointProbeLayout=' + (Resolve-Path -LiteralPath $LayoutWorld).Path) }
 foreach ($arg in $version.arguments.jvm) {
     if ($arg -isnot [string]) { continue }
@@ -70,7 +72,7 @@ $argsList.Add($version.mainClass)
 $utf8 = [Text.UTF8Encoding]::new($false)
 [IO.File]::WriteAllLines("$game/java.args", @($argsList | ForEach-Object { '"' + $_.Replace('\','/').Replace('"','\"') + '"' }), $utf8)
 [IO.File]::WriteAllText("$game/options.txt", "lang:zh_cn`nguiScale:2`nrenderDistance:4`npauseOnLostFocus:false`n", $utf8)
-if ($RailPack) {
+if ($RailPack -or $GuardPack) {
     $null = New-Item -ItemType Directory -Force "$game/resourcepacks"
     Copy-Item -LiteralPath $RailPackZip -Destination "$game/resourcepacks/Citizons_Railway.zip" -Force
     [IO.File]::AppendAllText("$game/options.txt", 'resourcePacks:["vanilla","mod_resources","file/Citizons_Railway.zip"]' + "`n", $utf8)

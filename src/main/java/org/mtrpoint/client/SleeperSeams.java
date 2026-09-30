@@ -11,24 +11,29 @@ public final class SleeperSeams {
     private record Plan(Rail rail,Track sampled,Map<Key,V3> moves) {}
     private static final Map<String,Plan> PLANS=new HashMap<>();
     private static final Map<String,Plan> FRAME_PLANS=new HashMap<>();
-    public static void begin(){FRAME_PLANS.clear();}
-    public static void clear(){PLANS.clear();FRAME_PLANS.clear();}
+    public static void begin(){FRAME_PLANS.clear();ContinuousGuards.begin();}
+    public static void clear(){PLANS.clear();FRAME_PLANS.clear();ContinuousGuards.clear();}
     public static void retain(Set<String> ids){PLANS.entrySet().removeIf(e->!ids.contains(e.getValue().rail.getHexId()));}
     public static boolean render(Rail rail,RailResource resource,boolean flip,V3 a,V3 b){
-        if(rail==null)return false;ProfileModel model=Profiles.model(resource.getId());if(model==null||!model.alignSleepers())return false;
+        if(rail==null)return false;ProfileModel model=Profiles.model(resource.getId());if(model==null||!model.alignSleepers()&&model.continuousGuard()==null)return false;
         String key=rail.getHexId()+"/"+resource.getId();Plan plan=FRAME_PLANS.get(key);
         if(plan==null){Track sampled=RailSampler.sample(rail);if(sampled==null)return false;plan=PLANS.get(key);
             if(plan==null||plan.rail!=rail||plan.sampled!=sampled){plan=build(rail,resource,sampled);PLANS.put(key,plan);}FRAME_PLANS.put(key,plan);}
-        Key cell=new Key(a,b);if(!plan.moves.containsKey(cell))return false;
+        Key cell=new Key(a,b);boolean planned=plan.moves.containsKey(cell);if(!planned&&model.continuousGuard()==null)return false;
         model=RailLod.model(resource.getId(),a.lerp(b,.5));
+        var guard=model.continuousGuard();Track track=plan.sampled;ContinuousGuards.Ends ends=guard==null?null:ContinuousGuards.exposed(rail,resource.getId());
         PointRenderer.cell(rail,resource,flip,a,b,model.fixed(),V3.ZERO,true);
+        if(guard!=null){var body=ContinuousGuards.body(guard.rails(),model,track,RailSampler.sweep(rail,resource,a,b),ends,flip);PointRenderer.cell(rail,resource,flip,a,b,body,V3.ZERO,true);}
         V3 move=plan.moves.get(cell);if(move!=null){
             // The fixed sweep may trim an arc overrun. The layout target was measured from
             // the original callback centre, so preserve that target after trimming.
             var sweep=RailSampler.sweep(rail,resource,a,b);
-            move=move.add(a.lerp(b,.5).sub(sweep.a().lerp(sweep.b(),.5)));
+            V3 layoutMove=move;move=layoutMove.add(a.lerp(b,.5).sub(sweep.a().lerp(sweep.b(),.5)));
             PointRenderer.cell(rail,resource,flip,a,b,model.supports(),move,false);
+            if(guard!=null)ContinuousGuards.supports(rail,resource,flip,a,b,model,track,ends,layoutMove);
         }
+        else if(guard!=null&&!planned){PointRenderer.cell(rail,resource,flip,a,b,model.supports(),V3.ZERO,false);ContinuousGuards.supports(rail,resource,flip,a,b,model,track,ends,V3.ZERO);}
+        if(guard!=null)ContinuousGuards.endpoint(rail,resource,flip,a,b,model,track,ends);
         return true;
     }
     private static Plan build(Rail rail,RailResource resource,Track sampled){

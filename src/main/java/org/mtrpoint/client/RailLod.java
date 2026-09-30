@@ -23,6 +23,13 @@ public final class RailLod {
         for(int level=0;level<3;level++){
             String model=level==0?access.point$model():descriptor.getAsJsonObject("lod").getAsJsonObject(level==1?"mid":"far").get("model").getAsString();
             JsonObject variant=descriptor.deepCopy();variant.addProperty("model",model);
+            if(level>0&&variant.has("continuousGuard")){
+                JsonObject turnout=variant.getAsJsonObject("continuousGuard").getAsJsonObject("turnout");
+                if(turnout!=null&&turnout.has("lod")){
+                    JsonObject turnoutLevel=turnout.getAsJsonObject("lod").getAsJsonObject(level==1?"mid":"far");
+                    if(turnoutLevel!=null){turnout.addProperty("model",turnoutLevel.get("model").getAsString());if(turnoutLevel.has("modelGroups"))turnout.add("modelGroups",turnoutLevel.getAsJsonObject("modelGroups").deepCopy());}
+                }
+            }
             if(level>0)models[level]=ProfileModel.read(variant,model,access.point$texture(),access.point$flipV(),reader);
             var d=models[level].detail();var base=high.detail();
             if(Math.abs(d.railCenter()-base.railCenter())>1e-5||Math.abs(d.railTop()-base.railTop())>1e-5||Math.abs(d.zMax()-base.zMax())>1e-5||Math.abs(d.zMin()-base.zMin())>1e-5)throw new IllegalArgumentException("LOD dimensions differ from ordinary rail");
@@ -31,7 +38,7 @@ public final class RailLod {
             String supportObj=supportObj(reader.read(model),supportNames);
             resources[level]=new RailResource(JsonReader.parse(data.toString()),key->{try{return key.data.toString().equals(model)?supportObj:reader.read(key.data.toString());}catch(Exception ex){throw new IllegalArgumentException(ex);}});
         }
-        high=new ProfileModel(high.detail().withFittingLods(List.of(models[1].detail().fittings(),models[2].detail().fittings())),high.attachments(),high.fixed(),high.supports(),high.alignSleepers());models[0]=high;
+        high=new ProfileModel(high.detail().withFittingLods(List.of(models[1].detail().fittings(),models[2].detail().fittings())),high.attachments(),high.fixed(),high.supports(),high.alignSleepers(),high.continuousGuard());models[0]=high;
         LEVELS.put(id,new Levels(models,resources));return high;
     }
     public static int level(double distanceSquared){return distanceSquared<NEAR*NEAR?0:distanceSquared<MID*MID?1:2;}
@@ -40,6 +47,7 @@ public final class RailLod {
     public static boolean render(org.mtr.core.data.Rail rail,RailResource source,boolean flip,V3 a,V3 b){
         var levels=LEVELS.get(source.getId());if(levels==null)return false;int level=level(a.lerp(b,.5));draws[level]++;
         var model=levels.models[level];var sweep=RailSampler.sweep(rail,source,a,b);
+        if(model.continuousGuard()!=null)return false;
         RailCellCache.submit(model.fixed(),sweep,flip,source.getModelYOffset(),model.detail().zMin(),model.detail().zMax(),V3.ZERO,true);
         V3 direction=sweep.forward(.5),center=sweep.rigid(V3.ZERO,flip,source.getModelYOffset());
         double yaw=Math.atan2(direction.z(),direction.x()),pitch=Math.atan2(direction.y(),Math.hypot(direction.x(),direction.z())),cant=(sweep.cantA()+sweep.cantB())/2;
