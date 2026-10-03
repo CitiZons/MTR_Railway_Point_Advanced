@@ -1,85 +1,63 @@
 # MTR Railway Point Advanced
 
-为 Minecraft 1.20.1 / Forge 47.4.18 / MTR 4.0.3 提供程序生成的 Y 形双开、三开道岔、协调建模的交叉渡线与不互通平交口。模型、默认贴图和蓝图编辑界面内置在 Mod 中，不依赖 botamochi129 或其他轨道资源包。
+![Minecraft 1.20.1](https://img.shields.io/badge/Minecraft-1.20.1-62a35a?style=flat-square) ![Forge 47.4.18](https://img.shields.io/badge/Forge-47.4.18-f59e0b?style=flat-square) ![MTR 4.0.3](https://img.shields.io/badge/MTR-4.0.3-3b82f6?style=flat-square) ![Version 0.1.5](https://img.shields.io/badge/version-0.1.5-2563eb?style=flat-square) ![License MIT](https://img.shields.io/badge/license-MIT-8b5cf6?style=flat-square)
 
-当前为 **0.1.4 实验版**。原生环境和带 BRsignal / Optional Rail / Connector 的隔离环境已做运行测试；第三方轨型的自动识别与真实列车连续通过尚不能视为全部验收，详见 `VALIDATION.md`。
+**让 MTR 的道岔成为真实的轨道结构，而不只是普通轨道的贴图替换。**
 
-**2026-09-26 修复：** 修正负高度下的轮缘槽裁切、采样点之间交叉轨道的漏检、平交覆盖长度及分区缓存刷新、多道岔编辑器的保存回执，以及动画裁切丢失碎片的问题。护轨先按完整区间合并，再只在真实外端生成内弯收尾；未编辑翼轨进入同一合并池，三开视图不再复制未合并翼轨。轮缘槽按轨道的世界高度及坡度裁切，保留槽底以下的轨底；端面使用独立切割钢材纹理并按实际钢轨截面生成。该次修复版本为 0.1.2；当前 0.1.3 继续保留这些修复。下述历史说明保留为背景。
+MTR Railway Point Advanced 为 Minecraft 1.20.1 的 MTR 提供程序生成的道岔、辙叉、平交和交叉渡线几何。它读取 MTR 当前轨道曲线，在交汇处生成尖轨、基本轨、翼轨、护轨、岔心、轮缘槽、拉杆、扣件和岔枕，并沿真实的坡度、曲线和倾角放置。模型、默认材质和蓝图编辑界面都包含在 Mod 中，不依赖额外的轨道资源包。
 
-**历史记录（2026-09-17）：** 用户实景反馈曾指出 Y 型单开道岔、复杂道岔和平交轨道存在钢轨未切断及轮缘通道缺失。本轮已针对这些可复现缺陷完成修复，并以离线几何回归、真实 Forge 隔离世界和保存布局探针验证；原存档中的极端重叠、第三方轨型和真实列车连续运营仍需按 `VALIDATION.md` 的边界进行验收。
+**Give MTR turnouts a real track structure instead of a flat visual patch.**
 
-## 0.1.4 更新：资源包全程护轨
+MTR Railway Point Advanced generates turnout, frog, crossing and crossover geometry for Minecraft 1.20.1. It samples MTR rail curves and builds switch rails, stock rails, wing rails, guard rails, frogs, flangeways, rods, fittings and sleepers along the actual alignment, grade and cant. The default models, materials and blueprint editor are bundled with the mod, so a separate rail pack is optional.
 
-配套 Citizons Railway `0.1.1` 新增外护轨与中央护轨。客户端读取资源描述中的 `continuousGuard`，将重复钢轨、随枕木移动的护轨承座和独立端头分开绘制；相连同型轨段省略接缝处端头，独立端头沿实际曲线、坡度和倾角截面绘制。外护轨在岔区使用普通轨道模板，避免将专用护轨承座当作运行轨扣件。短轨段按可用长度压缩端头。
+## What it adds / 模组内容
 
-这项功能需要 `0.1.4` 客户端 JAR，配套 Citizons Railway `0.1.1` 或更新版本；`0.1.3` 不读取 `continuousGuard`。网络协议仍为 3，客户端和服务端使用同一 Mod 版本。
+| English | 中文 |
+|---|---|
+| **Procedural turnouts** — same-node Y turnouts, three-way turnouts, curved turnouts and coordinated crossover groups. | **程序化道岔**——同节点 Y 形道岔、三开道岔、曲线道岔以及协调生成的交叉渡线组合。 |
+| **Fixed crossings** — non-interlocking diamonds and flat crossings with continuous rails and flangeways. | **固定交叉**——不互通菱形交叉和平交口，保持连续钢轨并生成轮缘槽。 |
+| **Real support details** — turnout sleepers, common frog plates, slide plates, guard-rail seats, wing-rail seats, braces and bolts. | **真实支承细节**——岔枕、岔心共用底板、滑床板、护轨和翼轨承座、加强件及螺栓。 |
+| **Animated appearance** — switch rails and movable frogs follow the visual movement observed from MTR and BRsignal snapshots. | **动画外观**——尖轨和可动岔心根据 MTR 与 BRsignal 的只读状态进行视觉运动。 |
+| **Blueprint editing** — select a junction in the world, preview the generated mesh, adjust supported parameters and save the appearance. | **蓝图编辑**——在世界中选择交汇，预览生成网格，调整支持的参数并保存外观。 |
+| **Resource-pack geometry** — use active rail-pack materials, UVs, model groups, cross-sections and LOD models for ordinary rails and turnouts. | **资源包几何**——普通轨道和道岔可使用当前资源包的材质、UV、模型分组、截面及 LOD 模型。 |
 
-## 0.1.3 更新：岔区枕木与扣件
+## Install / 安装
 
-本版包含平顶岔枕与完整护轨／翼轨承座修复，配套 [Citizons Railway 0.1.0](https://github.com/CitiZons/MTR_Citizons_Railway/releases/tag/v0.1.0)。发布清单见 [CHANGELOG.md](CHANGELOG.md)。
+需要 Minecraft 1.20.1、Forge 47.4.18 和 MTR Forge 4.0.3。将下面的同一版本 JAR 同时放入客户端和服务器的 `mods/` 文件夹：
 
-本版同时包含光影兼容修复：世界轨道网格直接使用 Minecraft 标准实体裁剪渲染类型，并在实体渲染阶段提交，使 Iris/Oculus 能正常输出钢轨、道砟、道岔和倾斜轨道材质。与 Optional Rail 0.1.1 联用时，超高采样接口异常会回退到 MTR 原生轨道几何。版本号仍为 0.1.3，网络协议仍为 3。
+Requires Minecraft 1.20.1, Forge 47.4.18 and MTR Forge 4.0.3. Put the same JAR version in the client and server `mods/` folders:
 
-This version also includes shader compatibility fixes: world rail meshes use Minecraft's standard entity cutout render type and are submitted during the entity stage, allowing Iris/Oculus to output rail, ballast, turnout and banked-track materials. With Optional Rail 0.1.1, failures in the cant sampling adapter fall back to native MTR rail geometry. The version remains 0.1.3 and the network protocol remains 3.
+```text
+mtr_railway_point_advanced-0.1.5.jar
+```
 
-- 多轨岔枕平顶化，保留底面与倒角，修复重叠黑纹；普通轨枕保留中央下凹。
-- 尖轨固定滑床板、基本轨外侧夹持、岔心共用底板。
-- 护轨、翼轨均与相邻运行轨共用承座，增加外侧加强支架和螺栓；覆盖 Y 普通／V 形岔枕及三开，沿用三个距离档位。
+网络协议为 `3`，客户端与服务器必须使用相同的 Mod 版本。`point-runtime-probe` 是开发测试工具，不要安装到正式客户端或服务器。
 
-本轮只改枕木和扣件生成；9 组最终世界渲染检查确认全部非支撑几何与基线一致。完整构建和隔离游戏验证通过，详见 [VALIDATION.md](VALIDATION.md)。配套资源包本轮模型及贴图未变，这些效果由客户端 Mod 生成；网络协议仍为 3。
+The appearance protocol is `3`; clients and servers must use the same mod version. `point-runtime-probe` is a development probe and should not be installed in a normal game.
 
-## 0.1.2 更新
+## First use / 初次使用
 
-- 右侧使用四个直接点击的页签：整体与轨型、尖轨与岔心、枕木排列、辙叉细调。字段说明包含单位、自动值及偏移方向；悬停标签或输入框可查看说明。连续输入合并为一次预览更新。
-- BRsignal 发布有效授权后即可选择获批分支，包括授权恰好从道岔节点开始的情况；只到道岔前结束的授权不会选到下一股。默认完整转辙动画为 **1 秒**，两尖轨间连杆随尖轨运动，三开也带活动连杆。已有保存的自定义时长保留，可在“整体与轨型”中修改。
-- 按 P 打开编号岔区选择图，可选中复杂岔区内的具体道岔，再进入独立蓝图；不增加物品或方块。
-- 世界模型使用持久 GPU 顶点缓冲，静态几何不逐帧复制／提交；仅在外观或块光变化时重传静态部分，转辙时更新活动部分，视锥外跳过绘制。
-- 界面、参数说明和按键名称支持简体中文、日文和英文，跟随 Minecraft 语言。
+1. 按 MTR 原有方法铺设轨道。道岔使用同一节点和符合 MTR 拓扑的分支；平交口使用两条同平面交叉轨道。
+2. 客户端会自动识别附近的道岔、辙叉和平交交汇，并生成对应几何。不需要放置额外方块或手工标记节点。
+3. 按 **P** 打开 64 格内的岔区选择图。点击编号或列表项目后，按 Enter 或选择“编辑选中道岔”进入蓝图。
+4. 在蓝图中预览几何、选择轨型、调整参数或移动单根岔枕。点击“保存外观”后，外观数据会写入独立的 `mtrpoint_appearance` 数据并同步给其他客户端。
+5. “试动尖轨”只改变视觉预览；“实时”恢复跟随列车状态。未保存的预览在退出界面时撤销。
 
-- 修复曲线／非对称道岔 V 形枕木的异常长尾和台阶：接缝先放在两股轨道之间，再向各自轨道投影，两臂分别保持正交；三开使用同样的内部接缝原则。
-- 单开及其他曲线道岔的翼轨沿实际偏移曲线生成，入轨与翼轨的折点直接求两条曲线交点，避免用直线弦代替曲线造成错位。
-- 世界渲染自动合并同一轨道、同侧、相同截面／高度／位置的重叠护轨，移除内部喇叭口，仅保留合并段两端外撇。相邻道岔编辑器仍独立；修改后重新计算，静止外观不会逐帧重建合并网格。
-- 默认覆盖长度倍率为 **0.9**。已有手调外观保留原倍率，可填入 0.9 或“恢复自动”。生成钢轨末端对齐实际被隐藏的 MTR 重复模型边缘，最后几根岔枕逐步对齐原模型的枕木位置，避免接缝缺枕。
-- 翼轨工作段与心轨保持轮缘槽间距，仅尾端短段外撇。固定心轨先等宽汇合，再收成实心 V 尖端。
-- 普通平交与交叉渡线中央采用共用的固定辙叉生成器：等宽轨头在交汇处合成实心尖头，沿实际交角切出连续轮缘槽，内侧翼轨／护轨随曲线延伸。锐角 V 辙叉和钝角交叉区均不再按固定步长删整段钢轨。原生圆角侧线轨头保留原截面和 UV。
-- 同一节点同向分出三支时生成一套三开道岔，包含四根尖轨和三个辙叉；“试动尖轨”依次切换三条支路。BRsignal／原生只读行车观察能选择中间支路。
-- 四个 Y 节点、两条本线、两条相交渡线组成交叉渡线时，自动协调四个道岔和中央交叉区：裁切重叠范围，中央采用一组共用岔枕，本线和渡线都沿实际曲线生成。四个道岔各自保留独立 UI、参数和行车位置，中央交叉区也可单独编辑。组合接缝自动协调；若停用其中一处，组合优化退出，其他部分恢复普通独立生成。
+1. Lay rails using the normal MTR workflow. Turnouts must use MTR-compatible same-node branches; crossings use two coplanar intersecting rails.
+2. The client detects nearby turnouts, frogs and crossings and generates their geometry automatically. No extra block or marker is required.
+3. Press **P** to open the junction map within 64 blocks. Select an entry, then press Enter or choose **Edit selected turnout**.
+4. Preview the mesh, choose a rail style, edit supported parameters or move an individual sleeper. **Save appearance** stores the result in separate `mtrpoint_appearance` data and synchronizes it to other clients.
+5. **Test switch** is visual preview only; **Live** follows observed train state again. Unsaved previews are discarded when the screen closes.
 
-交叉渡线的中央范围包含完整的四处辙叉，接缝放在相邻道岔翼轨／护轨末端之后。钢轨先越过公共分界面再统一裁齐，避免曲线中轨头偏离中心线导致断口。固定平交仍保留必要的轮缘槽，不改变线路连通关系。
+## Resource-pack integration / 资源包适配
 
-本版外观网络协议为 3，以支持三开外观 ID。客户端和服务端同时更新到 0.1.3；旧外观数据可继续读取。没有修改 MTR 寻路、PathData、BRsignal 授权、可视化映射或信号逻辑。
+Mod 会读取当前启用的 Minecraft 资源栈，并优先使用轨型描述中声明的真实模型和材质。支持 MTR 原生轨型、OBJ/MTL、Blockbench 普通立方体模型，以及带 `modelGroups` 的轨型描述。轨型描述可以指定钢轨、轨枕、扣件、道砟、保留附件、钢轨截面、材质、UV 和近／中／远 LOD 模型。
 
-## 0.1.1 历史修复
+The mod reads the active Minecraft resource stack and prefers the actual models and materials declared by a rail profile. It supports native MTR styles, OBJ/MTL, ordinary Blockbench cube models and profiles with `modelGroups`. A profile can define rail, sleeper, fitting, ballast and retained-attachment groups, rail cross-sections, textures, UVs and near/mid/far LOD models.
 
-修复 BRsignal 非空行车快照同步时的 `String too big (was 101 characters, max 100)` 崩溃。MTR 的轨道 ID 由 6 段 16 位十六进制坐标和 5 个连字符组成，固定为 101 字符；编码与解码现在共用正确的限制，不截断 ID。0.1.1 当时使用网络协议 2 修复旧解码限制；当前版本使用协议 3，继续保留 101 字符处理。
+轨型描述的位置为 `assets/<namespace>/rail_profiles/<name>.json`。最小示例：
 
-## 安装与使用
-
-将 `build/libs/mtr_railway_point_advanced-0.1.4.jar` 安装在客户端和服务端。不要安装 `point-runtime-probe`，那是开发测试工具。
-
-1. 按 MTR 原有方法铺设轨道。Y 道岔使用同一节点、同向出发并逐渐分离的两条分支，可有一条入口轨道，也可在同一节点另一侧再分成两支，分别生成两组 Y 道岔；平交口使用没有共用节点的两条交叉轨道。
-2. 客户端会自动识别附近的交汇并生成几何，不需要先设置参数。不同高度的立交、四路互通节点和接近重合的轨道不作为平交口处理。
-3. 按 **P** 打开 64 格内的岔区选择图，默认参考视线预选；点击轨道图编号或右侧列表选择具体交汇，选中范围高亮。滚轮缩放、右键平移、Tab／Shift+Tab 切换，Enter 或“编辑选中道岔”进入蓝图。列表支持翻页；按键可在 Minecraft 控制设置中更改。
-4. 左侧是实际生成网格的俯视／轴测预览。滚轮缩放、右键拖动平移；点击岔枕后拖动可调整该根岔枕的纵向位置。
-5. 右侧四个页签可直接点击。“整体与轨型”调整覆盖长度、轨距、轨顶高度、轨头宽度、整体高差和动画时长；“尖轨与岔心”调整尖轨长度、动程、基础轮缘槽和辙叉纵移；“枕木排列”包含枕木尺寸、间距、余长和方向；“辙叉细调”调整护轨、翼轨及心轨。悬停字段查看单位、0 的含义及正负方向。
-6. “枕木排列”页默认使用 V 形：两臂分别与自己的支线正交，在中间裁切拼接；首尾偏角可调整整体偏转或沿程变化。另保留沿曲线加整体偏角、全部平行、首尾线性渐变、首尾平滑渐变。旧存档保留旧模式，可切到 V 形或点“恢复自动”。角度单位是度；平行模式使用起点／整体角度，渐变模式使用首尾两个角度。枕木长度及支承件位置随旋转重新适配钢轨。
-7. “切换轨型”依次提供自动、MTR 立体轨道、MTR 立体侧线和可识别的其他样式；下方显示当前选择。自动和它当前识别到的同一轨型外观相同，但是否自动跟随资源变化不同。
-8. “返回选择图”便于继续选择邻近道岔；“退出蓝图”与 Esc 返回游戏。离开蓝图会撤销未保存的预览，先点“保存外观”即可保留修改。
-9. “试动尖轨”仅预览外观，“实时”恢复跟随列车；“恢复自动”清除该处的手调值。“保存外观”保存到独立的 `mtrpoint_appearance` 数据中并同步给其他客户端。关闭界面放弃未保存的预览。保存需要创造模式或 OP，并且距离交汇中心不超过 64 格。
-
-“辙叉细调”页分别调整护轨的纵移、加长和轮缘槽增量，翼轨的纵移、加长和轮缘槽增量，以及心轨加长。单位均为米，增量 0 使用自动值。护轨位于外侧基本轨内侧，端部向轨道内侧张开；固定辙叉的两根心轨保持原截面宽度，内缘汇合后才收成实心 V 形鼻端，配合连续翼轨，可动心轨在两端贴合相应翼轨，后跟保持固定。
-
-## 轨型适配
-
-模型沿 MTR 实际曲线生成，包括渐薄尖轨、分层钢轨截面、翼轨、护轨、轮缘槽、岔心、拉杆和一组共用岔枕。局部取消原来的轨道外观回调，再绘制新网格；不通过叠放两套普通轨道来制作岔枕。
-
-原生 `default_3d` 与 `default_3d_siding` 分别从当前 OBJ 提取钢轨表面、逐顶点 UV 和扣件：普通立体轨道重建共用的混凝土岔枕，顶面使用原贴图的无轨座阴影区域，避免加长后把烘焙阴影拉伸，立体侧线按其原生模型重排独立支承座，不再把两种轨型都画成横枕。岔尖和岔心仍需按交汇几何生成，弯曲、加长和接缝不等于逐顶点不变地复制直轨。
-
-适配读取当前启用的 Minecraft 资源栈，支持原生轨型、OBJ/MTL 和普通立方体 Blockbench 模型的截面推断，并尽可能沿用轨头及岔枕材质。单独的桥梁、隧道、接触网样式不属于替换目标。OBJ 中明显位于轨枕以下的道床及轨道包络外的附属面会保留。
-
-**没有统一语义的第三方模型，不能保证自动准确区分钢轨、枕木和附属结构。** 未识别的样式默认保留原状，蓝图会提示选择轨型；可用“切换轨型”明确指定要替换的样式，再校准轨距、轨高和轨头宽度。混合多个轨距、复杂旋转/网格 Blockbench、把隧道与轨道合在同一网格内等情况需要专门的轨型描述。支持加载不等于逐个资源包已验证。
-
-轨型描述位置：`assets/<任意命名空间>/rail_profiles/<名称>.json`。例如：
+Rail profiles are stored at `assets/<namespace>/rail_profiles/<name>.json`. Minimal example:
 
 ```json
 {
@@ -95,57 +73,72 @@ This version also includes shader compatibility fixes: world rail meshes use Min
 }
 ```
 
-将 `track` 设为 `false` 可以明确标记桥梁等附属样式。轨型 ID 来自 MTR 样式 ID，不是 OBJ 文件名。默认资源也可以用外部资源包覆盖，但运行不需要外部包。
+Citizons Railway `0.1.1` 或更新版本可以通过 `modelGroups`、真实钢轨截面、方向别名、连续护轨端头和 LOD 模型为普通轨道及道岔提供完整材质。样式命名空间和方向后缀会规范化处理，不需要逐个资源包加入白名单，也不改变握手协议。
 
-带 `modelGroups` 的轨型描述可从同一个 OBJ 指定钢轨、轨枕、扣件、保留附件和普通支承组，读取原模型截面与逐顶点 UV。Citizons Railway 使用这一路径，让普通轨道与道岔共用材质、扣件和 0.35 m 道砟；`alignEndpointSleepers` 启用接缝枕木调整。钢轨与道砟沿共享端点连续扫掠，并使用同一倾斜轴。样式命名空间和方向后缀统一解析，不需要逐包白名单或修改握手协议。完整描述见配套 `MTR_Citizons_Railway` 仓库。
+Citizons Railway `0.1.1` or newer can provide complete ordinary-rail and turnout materials through `modelGroups`, real rail cross-sections, direction aliases, continuous guard ends and LOD models. Namespaces and directional suffixes are normalized, so a pack does not need a per-pack whitelist and the handshake protocol remains unchanged.
 
-描述中的近、中、远 `lod` 自动控制细节；Citizons Railway 在 4 m 与 12 m 切换扣件档位。静态几何按空间块缓存，未变化时不重建或上传。道岔先保留最外侧基本轨扣件，再去重相邻内轨扣件，各扣件朝向跟随自己的钢轨。
+## Detail distances / 精度距离
 
-多轨岔枕使用平顶承托，普通两轨轨枕保留资源模型的中央下凹。尖轨活动段使用固定滑床板，基本轨在外侧保留夹持；护轨、翼轨与各自相邻运行轨共用底板，并在外侧增加加强支架。岔心附近相邻承轨座组合为共用底板。这些支撑沿用资源模型材质和距离细节档位，不随尖轨移动。
+近／中和中／远两个分界点可以在“模组 → MTR Railway Point Advanced → 配置”中调整，默认值为 **4 m** 和 **12 m**，范围为 `0–4096 m`。第二个值必须大于或等于第一个值；两个值相等时跳过中精度档，两个值都为 `0` 时始终使用低精度档。配置只保存在客户端，保存后立即应用于普通轨道、倾斜轨道、道砟、枕木、扣件和道岔。
 
-## 联动边界
+The high-to-medium and medium-to-low boundaries are configurable in **Mods → MTR Railway Point Advanced → Config**. Defaults are **4 m** and **12 m**, with a range of `0–4096 m`. The second value must be at least the first; equal values skip the medium tier, and two zeroes always select the low tier. The setting is client-side and applies immediately to ordinary rails, banked rails, ballast, sleepers, fittings and turnouts.
 
-- **MTR**：只读取 Rail、轨道样式和列车路径；不修改连接、限速、信号色、寻路、运行路径或列车位置。
-- **BRsignal**：通过其现有 `getAuthorizedPaths` / `getVehicleSnapshots` 只读快照推导通过方向。服务端发布显示数据，客户端平滑移动尖轨与可动岔心。占用方向优先；缺失、过期或冲突时保持上次外观。没有调用授权、放行、抢占、释放、地图投影或信号显示写接口，也没有修改 BRsignal 工程。
-- **没有 BRsignal**：读取客户端可见列车的原生路径进行外观预测；该状态不是联锁授权。
-- **Optional Rail**：通过它现有的视觉曲线采样接口使用节点偏移、旋转和超高。没有覆盖它的 Redirect；本 Mod 在轨道外观回调入口取消已替换的片段。
-- **平交口**：只生成交叉钢轨，不新增连接、不允许转线，也不新增冲突保护。列车运行防护仍完全由现有系统负责。
+## Rendering and performance / 渲染与性能
 
-动画是视觉表现，不把“动画完成”作为列车放行条件。没有改变 BRsignal 中的轨道可视化映射或信号机逻辑。
+世界网格使用 Minecraft 标准实体裁剪渲染类型，并在实体渲染阶段提交，兼容 Iris、Oculus 及 Optional Rail 的倾斜轨道采样。固定和活动部件分别缓存到持久 GPU 缓冲，按材质、距离档位和空间块批处理；视锥外几何跳过绘制，静止网格不会逐帧重建或上传。资源包材质、钢轨、道砟、岔枕和扣件因此使用同一套渲染路径。
 
-## 几何边界
+World meshes use Minecraft's standard entity cutout render type and are submitted during the entity stage, which keeps Iris, Oculus and Optional Rail banking samples on the same rendering path. Static and moving parts use persistent GPU buffers and are batched by material, detail tier and spatial cell; out-of-frustum geometry is skipped, and unchanged meshes are not rebuilt or uploaded every frame. Rail, ballast, sleepers, fittings and resource-pack materials therefore share one rendering path.
 
-当前支持同平面 Y 双开、同节点三开、不互通平交，以及四节点交叉渡线组合；不包括交分道岔。枚举回归覆盖 13 类现实布局，其中 10 类通过分类与有限网格检查（8 类实际生成交汇几何，窄轨并行和立交正确分类为无需平交几何）；梯形道岔组、单/双交分中心及四臂互通明确标记为需要专用开通拓扑，不会静默按普通平交生成。自动检测使用局部采样，过短分支、极小交角、交汇区域互相重叠和过大高差可能需要调整原有铺轨布局。
+这些优化针对已经确认的几何重建、GPU 上传和蓝图绘制热点。实际 FPS 仍取决于整合包、着色器、资源包和视距；可复现的回归结果见 [VALIDATION.md](VALIDATION.md)。
 
-原生两种立体轨型及提供有效 `modelGroups` 的资源轨型使用各自模型截面；其他可识别轨型采用可调通用截面。局部替换边界按 MTR 模型重复片段划分，极长重复模型和复杂附件需要额外描述及实景检查。
+These optimizations target measured geometry rebuild, GPU upload and blueprint drawing costs. Actual FPS still depends on the modpack, shader, resource pack and view distance; reproducible checks are recorded in [VALIDATION.md](VALIDATION.md).
 
-同一交汇目前采用一套截面／材质，不能精确表现两分支不同轨距、不同截面的过渡。原生二维轨道会在交汇处改为三维模型，二维／三维边界还没有专用渐变段。这些属于首版限制，不能据此宣称“所有轨道模型已经完全适配”。
+## Behaviour boundaries / 工作边界
 
-## 性能
+- **MTR**：只读取轨道样式、轨道曲线和列车路径，不修改 Rail、PathData、连接、限速、寻路或列车位置。
+- **BRsignal**：只读取现有授权快照和车辆快照推导视觉方向，不调用授权、放行、抢占、释放或信号显示写接口。
+- **Optional Rail**：只使用已有的视觉曲线采样接口；采样失败时回退到 MTR 原生轨道几何。
+- **平交口**：只生成交叉钢轨和轮缘槽，不新增连接、转线或冲突保护。
+- **动画**：仅用于外观，不把动画完成作为列车放行条件。
 
-蓝图预览改用一次线段批次，移除逐像素 `fill`；投影基向量按帧计算，边列表按模型变化缓存。试动不再逐帧完整重建道岔，动画只插值活动钢轨顶点。轨道采样按 Rail / Optional Rail 节点设置复用；最近点查询使用空间树；替换判定按所属轨道索引；行车数据按节点索引。世界模型按材质上传到持久 GPU 缓冲，固定与活动部件分开，使用视锥裁剪；块光按间隔检查，变化才重新上传。重用原生内存暂存区，清理离开检测范围的 GPU 缓冲；交叉渡线分组按几何及启用状态缓存。全屏蓝图和选择图打开时跳过被遮住的本道岔世界模型提交。
+- **MTR**: reads rail styles, rail curves and train paths without changing Rail, PathData, connections, speed limits, routing or train positions.
+- **BRsignal**: reads existing authority and vehicle snapshots for visual direction only; it does not call write APIs for authority, release, reservation or signal display.
+- **Optional Rail**: uses its existing visual curve sampling interface and falls back to native MTR geometry when sampling fails.
+- **Crossings**: add visual crossing rails and flangeways only; they do not add connections, route changes or conflict protection.
+- **Animation**: visual only and never a release condition for trains.
 
-这些修改针对已发现的热点。算法基准、运行测试和当前边界见 `VALIDATION.md`；它们不能代替完整整合包原存档的 FPS 实测。当前构建为 0.1.4，客户端与服务端应使用同一版本。
+## Supported geometry and limitations / 支持范围与限制
 
-## 构建与验证
+当前稳定支持同平面 Y 形道岔、曲线道岔、三开道岔、不互通菱形／平交，以及四节点交叉渡线组合。几何枚举还覆盖 13 类现实布局；梯形道岔组、单／双交分中心和四臂复杂互通需要专用开通拓扑，不会静默按普通平交生成。不同轨距或不同钢轨截面在同一交汇处暂不支持精确过渡，极端短分支、极小交角、重叠交汇和过大高差需要按 [VALIDATION.md](VALIDATION.md) 的边界检查。
 
-Java 17：
+Stable support covers coplanar Y and curved turnouts, three-way turnouts, non-interlocking diamonds and flat crossings, and four-junction crossover groups. Geometry enumeration also checks 13 real-world layout families; ladder groups, single/double slips and four-arm junctions require dedicated opening topology and are not silently treated as ordinary crossings. Exact transitions between different gauges or rail cross-sections within one junction are not supported yet. Very short branches, tiny crossing angles, overlapping junctions and large height differences should be checked against [VALIDATION.md](VALIDATION.md).
+
+自动识别到轨型并不等于每个第三方资源包都已单独验证。没有统一语义的复杂 Blockbench 网格、把隧道或桥梁和轨道放在同一模型内的资源，需要提供明确的轨型描述或在蓝图中手动选择样式。
+
+Automatic rail-style recognition does not mean every third-party pack has been individually verified. Complex Blockbench meshes without semantic groups, or models that combine tunnels or bridges with rails, need an explicit profile or a manual style choice in the blueprint.
+
+## Build and develop / 构建与开发
+
+需要 JDK 17。MTR 编译依赖位于 `../MTR_BRsignal_addon/libs/MTR-forge-4.0.3+1.20.1.jar`。常用命令：
+
+JDK 17 is required. The compile-time MTR dependency is `../MTR_BRsignal_addon/libs/MTR-forge-4.0.3+1.20.1.jar`. Common commands:
 
 ```powershell
-.\gradlew.bat build --no-daemon
-.\gradlew.bat smokeJar --no-daemon
-.\tools\runtime_probe.ps1
-.\tools\runtime_probe.ps1 -World -BaseOnly
-.\tools\runtime_probe.ps1 -World -MtrOnly
-.\tools\runtime_probe.ps1 -World -Connector
+.\gradlew.bat build --offline --no-daemon --console=plain
+.\gradlew.bat regression --offline --no-daemon --console=plain
+.\tools\runtime_probe.ps1 -RailPack -MtrOnly
 ```
 
-`build` 包含不启动游戏的几何回归检查；输出示例 OBJ 到 `build/previews/`。运行时测试在 `build/runtime-*` 中创建独立环境，不复制用户存档。`-World` 会在那里生成一次性平坦测试世界。
+`build` 包含离线几何回归并生成 `build/libs/mtr_railway_point_advanced-0.1.5.jar`；运行探针会在 `build/runtime-*` 创建隔离环境，不复制用户存档。资源包专项检查优先使用环境变量 `CITIZONS_RAILWAY_PACK`，否则读取同级 `MTR_Citizons_Railway` 子项目。
 
-构建仍需 `../MTR_BRsignal_addon/libs/MTR-forge-4.0.3+1.20.1.jar` 中的 MTR 编译依赖。资源包专项回归优先读取环境变量 `CITIZONS_RAILWAY_PACK` 指向的包目录（其中包含 `assets`），否则读取同级材质包子项目的 `../MTR_Citizons_Railway/resourcepacks/Citizons_Railway`。没有外部包时明确输出 `RESOURCE_MODELS: SKIPPED`；独立的旋转轴和连续截面检查仍执行。显式配置错误或已找到的包不完整会失败，不会按通过处理。
+`build` includes offline geometry regression and produces `build/libs/mtr_railway_point_advanced-0.1.5.jar`. Runtime probes create isolated environments under `build/runtime-*` and do not copy user saves. Resource-pack checks prefer `CITIZONS_RAILWAY_PACK`, then the sibling `MTR_Citizons_Railway` project.
 
-资源包游戏探针使用 `tools/runtime_probe.ps1 -RailPack -BaseOnly`（MTR + Optional Rail）或 `-RailPack -MtrOnly`。ZIP 默认读取同级材质包子项目的 `dist/Citizons_Railway.zip`，也可通过 `-RailPackZip` 指定。运行脚本的 `-MinecraftRoot`、`-Java` 及可选联动模组路径需匹配本机已安装环境。
+版本变化见 [CHANGELOG.md](CHANGELOG.md)，验证证据见 [VALIDATION.md](VALIDATION.md)。
 
-`tools/generate_assets.py` 生成本项目原创小贴图并检查三语键一致，需要 Pillow；翻译直接维护在 `lang/*.json`，脚本不会覆盖。`tools/render_preview.py` 由 Blender 后台运行，生成可继续编辑的 `.blend` 和几何预览 PNG。模型的权威来源是程序生成器，手工修改示例 `.blend` 不会自动反写游戏内参数。
+Version changes are listed in [CHANGELOG.md](CHANGELOG.md), and verification evidence is recorded in [VALIDATION.md](VALIDATION.md).
 
-实测状态与剩余问题记录在 `VALIDATION.md`。
+## Compatibility and licence / 兼容性与许可
+
+本 Mod 通过 Forge addon 和 Mixin 接入 MTR，不修改 MTR 源码或原始 JAR。源码采用 [MIT License](LICENSE)。第三方字体、MTR 资源和其他外部文件的许可与来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+The mod integrates with MTR through a Forge addon and Mixins without modifying MTR source or its original JAR. Source code is released under the [MIT License](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for licences and sources of third-party fonts, MTR assets and other external files.

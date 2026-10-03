@@ -11,7 +11,8 @@ import java.util.*;
 
 /** Real distance-selected native OBJ resources. Models are loaded once and reuse MTR's GPU batches. */
 public final class RailLod {
-    public static final double NEAR=4,MID=12;
+    private static double nearDistance=-1,farDistance=-1;
+    private static RailDetailDistances distances;
     private record Levels(ProfileModel[] models,RailResource[] resources) {}
     private static final Map<String,Levels> LEVELS=new HashMap<>();
     public static final long[] draws=new long[3];
@@ -41,13 +42,22 @@ public final class RailLod {
         high=new ProfileModel(high.detail().withFittingLods(List.of(models[1].detail().fittings(),models[2].detail().fittings())),high.attachments(),high.fixed(),high.supports(),high.alignSleepers(),high.continuousGuard());models[0]=high;
         LEVELS.put(id,new Levels(models,resources));return high;
     }
-    public static int level(double distanceSquared){return distanceSquared<NEAR*NEAR?0:distanceSquared<MID*MID?1:2;}
+    public static RailDetailDistances distances(){
+        double near=org.mtrpoint.PointConfig.lodNear(),far=org.mtrpoint.PointConfig.lodFar();
+        if(near!=nearDistance||far!=farDistance){nearDistance=near;farDistance=far;distances=RailDetailDistances.metres(near,far);}
+        return distances;
+    }
+    public static int level(double distanceSquared){return distances().level(distanceSquared);}
     public static int level(V3 position){var p=Minecraft.getInstance().gameRenderer.getMainCamera().getPosition();double x=p.x-position.x(),y=p.y-position.y(),z=p.z-position.z();return level(x*x+y*y+z*z);}
     public static ProfileModel model(String id,V3 position){Profiles.get(id);var levels=LEVELS.get(id);return levels==null?Profiles.model(id):levels.models[level(position)];}
     public static boolean render(org.mtr.core.data.Rail rail,RailResource source,boolean flip,V3 a,V3 b){
-        var levels=LEVELS.get(source.getId());if(levels==null)return false;int level=level(a.lerp(b,.5));draws[level]++;
-        var model=levels.models[level];var sweep=RailSampler.sweep(rail,source,a,b);
+        // MTR can expose the same resource with a direction suffix (for example _1/_2).
+        // LOD registration is keyed by the canonical style, so looking up the raw resource
+        // id would silently fall back to MTR's renderer for only those cells.
+        var levels=LEVELS.get(Profiles.canonical(source.getId()));if(levels==null)return false;int level=level(a.lerp(b,.5));
+        var model=levels.models[level];
         if(model.continuousGuard()!=null)return false;
+        draws[level]++;var sweep=RailSampler.sweep(rail,source,a,b);
         RailCellCache.submit(model.fixed(),sweep,flip,source.getModelYOffset(),model.detail().zMin(),model.detail().zMax(),V3.ZERO,true);
         V3 direction=sweep.forward(.5),center=sweep.rigid(V3.ZERO,flip,source.getModelYOffset());
         double yaw=Math.atan2(direction.z(),direction.x()),pitch=Math.atan2(direction.y(),Math.hypot(direction.x(),direction.z())),cant=(sweep.cantA()+sweep.cantB())/2;

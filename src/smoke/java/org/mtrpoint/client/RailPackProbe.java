@@ -23,6 +23,7 @@ final class RailPackProbe {
         for(var q:Profiles.attachments(STYLE))if(q.uv()==null||!q.surface().texture().startsWith("citizons_railway:"))throw new AssertionError("Ballast material/UV missing");
         if(p.detail().fittingLods().size()!=2)throw new AssertionError("Distance LOD templates missing");
         if(!Profiles.choose(List.of("default_3d",STYLE),"").source().equals(STYLE)||!Profiles.choose(List.of(STYLE,"default_3d"),"").source().equals(STYLE))throw new AssertionError("Style order chose native rails");
+        if(!Profiles.choose(List.of("default_3d",STYLE),"default_3d").source().equals(STYLE))throw new AssertionError("Saved built-in profile masked active custom rail style");
         if(Profiles.get("mtrsteamloco:"+STYLE+"_2").profile()!=p)throw new AssertionError("Legacy style ID failed to resolve");
         if(!Profiles.choose(List.of(STYLE),"missing_old_style").source().equals(STYLE))throw new AssertionError("Missing saved style overrides enabled rail pack");
         System.out.println("PACK_STYLE_SELECTION: PASS explicit custom profile wins automatic order; legacy and missing saved IDs resolve");

@@ -24,13 +24,22 @@ public final class Profiles {
     public static void clear(){CACHE.clear();ALIASES.clear();ATTACHMENTS.clear();MODELS.clear();RailLod.clear();SleeperSeams.clear();RailSampler.clearModels();}
     public static Adapted get(String id){return CACHE.computeIfAbsent(canonical(id),Profiles::load);}
     public static Profile choose(Collection<String> styles,String forced){
-        if(!forced.isBlank()){var selected=get(forced);if(selected.track&&selected.profile!=null)return selected.profile;}
+        // Older appearance data commonly stores default_3d as the selected profile. That is
+        // a valid fallback, but it must not override a currently loaded custom rail style on
+        // the same turnout: doing so leaves native cells in the pack material beside a generated
+        // turnout in the default material. An explicitly selected custom profile remains forced.
+        String forcedId=forced.isBlank()?"":canonical(forced);Adapted forcedProfile=forced.isBlank()?null:get(forcedId);
+        boolean forcedBuiltin=forcedProfile!=null&&forcedProfile.track&&forcedProfile.profile!=null&&builtin(forcedId);
+        if(forcedProfile!=null&&forcedProfile.track&&forcedProfile.profile!=null&&!forcedBuiltin)return forcedProfile.profile;
         Profile best=null;int priority=-1;
         for(String raw:styles){String id=canonical(raw);var option=get(id);if(!option.track||option.profile==null)continue;
             int rank=MODELS.containsKey(id)?2:Set.of("default","default_3d","default_3d_siding").contains(id)?0:1;
             if(rank>priority){priority=rank;best=option.profile;}}
-        return best==null?new Profile(1.435,.264,.068,.14,.165,Profile.STEEL,Profile.TIMBER,"unmapped",false):best;
+        if(best!=null&&(!forcedBuiltin||!builtin(best.source())))return best;
+        return forcedProfile!=null&&forcedProfile.track&&forcedProfile.profile!=null?forcedProfile.profile:
+            best==null?new Profile(1.435,.264,.068,.14,.165,Profile.STEEL,Profile.TIMBER,"unmapped",false):best;
     }
+    private static boolean builtin(String id){return Set.of("default","default_3d","default_3d_siding").contains(canonical(id));}
     public static Profile forced(String style){Adapted a=get(style);return a.profile!=null?a.profile:new Profile(1.435,.26428,.068,.14,.165,Profile.STEEL,Profile.TIMBER,style,false);}
     private static Adapted load(String id){
         if(id.equals("default"))return new Adapted(Profile.STANDARD,true,"mtrpoint.profile_native");

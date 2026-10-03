@@ -6,9 +6,11 @@ import net.minecraft.resources.ResourceLocation;
 public final class PointRenderType {
     private PointRenderType() {}
     public static RenderType texture(ResourceLocation texture){
-        // Use the vanilla RenderType itself. Iris/Oculus recognizes this exact state
-        // and routes it through the shader pack's entity pipeline; a custom RenderType
-        // with the same shader still gets treated as an unclassified draw.
-        return RenderType.entityCutoutNoCull(texture);
+        // Rail textures already contain their material shading. The entity shader applies
+        // another directional diffuse term to NEW_ENTITY normals, which makes the whole
+        // rail web fall to ambient light from some camera angles. Vanilla text uses the
+        // same packed lightmap without that second diffuse term, keeps the texture in a
+        // normal classified pipeline for shader loaders, and has no face culling.
+        return RenderType.text(texture);
     }
 }

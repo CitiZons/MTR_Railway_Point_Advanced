@@ -1,5 +1,13 @@
 # 验证记录
 
+## 0.1.5 发布验证（2026-10-03）
+
+- 版本元数据升至 0.1.5，网络协议保持 3；客户端和服务端仍要求使用同一构建。
+- `gradlew regression --offline --no-daemon --console=plain`、`reobfJar` 和 `reobfSmokeJar` 通过。资源包探针中的样式选择、道岔绘制、资源重载和客户端／服务端交接均通过。
+- 回归覆盖保存的内置 `default_3d` 样式被当前自定义资源包样式遮蔽的场景，以及 `_1`／`_2` 方向后缀命中规范化 LOD 的场景。
+- LOD 配置回归覆盖默认 4 m／12 m、两个分界点相等、两个值为 0 和高精度档为 0 的情况。
+- 本节记录的是 0.1.5 当前实现的构建和隔离运行证据；复杂存档中的专用道岔拓扑仍按下方几何边界单独验收。
+
 ## 0.1.4 发布验证（2026-09-30）
 
 - 配套 Citizons Railway 0.1.1 或更新版本；`continuousGuard` 支持从 0.1.4 开始提供，网络协议仍为 3。
@@ -213,6 +221,8 @@ V 枕木原先求两股轨道在相同弧长处的法线交点，接近平行时
 - 15°、30°、60°、90°、150° 平交各 2,600 个独立解析轨头／轮缘槽采样点通过；检查空缺、重复顶面及反向轨道一致性。直线和弯曲交叉渡线分别检查四个辙叉、护轨覆盖，以及全部偏移钢轨在两条接缝两侧的支承面。
 - 槽深与封口使用轨条自身高度平面；整体移动到 Y=-40、64、180 后，全部网格顶点及面数与原模型平移一致，避免将绝对世界高度误作局部轨顶高度而挖穿轨底或遗漏封口。
 - 原生 `default_3d`、`default_3d_siding` 各 1,400 个轨顶采样通过，UV 保留。侧线使用 OBJ 实际平顶宽度作为检查基准，其圆角肩部不是平顶支承面。
+- 原生材质交接将 `default`、`default_3d` 与 `default_3d_siding` 视为同一内置轨型族，避免默认平面回调在道岔生成网格旁漏出旧材质；带 `_1`／`_2` 方向后缀的资源也按规范化样式命中同一套 LOD 表。
+- 外观存档中遗留的 `default_3d`／`default_3d_siding` 只作为回退值；当当前道岔轨道已注册有效自定义样式时，自定义样式优先，避免旧的内置选择覆盖资源包材质。`RailPackProbe` 增加了该场景的回归。
 - `build/runtime-connector-012/stdout.log` 和 `build/runtime-mtr-only-012/stdout.log` 均有 `POINT_DIAMOND: PASS`、两次 `POINT_SCISSORS: PASS` 及 `POINT_WORLD_FINAL: PASS`。原有网络、BR 方向观察、三开、编辑器和外观保存同步检查通过。
 - 查看上述隔离目录截图 `point-diamond-close.png`、`point-crossing-close.png`、`point-crossing-siding.png`，以及 `build/previews/*-crossing-detail.png` 的 Blender 近景。可编辑场景为同名 `.blend`；生成脚本 `tools/render_crossings.py`。
 
@@ -345,3 +355,9 @@ BRsignal 0.1.2 在不带 Connector 的纯 Forge 测试世界启动时，其现�
 - Optional Rail 采样适配器在反射接口不匹配或运行时异常时回退到 MTR 原生 `RailMath`，不再让倾斜钢轨和道砟整段消失。
 - Point Advanced 版本保持 0.1.3；Optional Rail 版本升至 0.1.1；网络协议保持 3。
 - Point Advanced 完整构建及几何回归通过；Optional Rail 构建及 707 项回归通过。未修改 `citizons_railway` 材质包。
+## 可调轨道精度分界（工作区变更，2026-10-01）
+
+- 游戏配置新增高→中、中→低两个距离分界点，默认仍为 4 m 与 12 m，范围为 0–4096 m。
+- 两个值可以相等；相等时直接从高精度切换到低精度。两个值都为 0 时所有轨道、道砟、枕木和扣件均使用低精度档。
+- 配置只保存在客户端并即时影响普通轨道、倾斜轨道和道岔 GPU 批次，不修改材质包描述、外观存档或网络协议。
+- 新增 `RAIL_DETAIL` 回归覆盖默认、自定义、边界相等、双零以及零高精度档；Point Advanced 完整构建和原有几何回归继续通过。

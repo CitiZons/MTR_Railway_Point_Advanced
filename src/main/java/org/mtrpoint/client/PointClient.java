@@ -306,7 +306,7 @@ public final class PointClient {
      *  rule that hides a native cell and the boundary the mod draws to stay one decision. */
     static boolean suppress(List<View> candidates,String railId,String style,V3 p,double margin){
         if(railId==null)return false;style=Profiles.canonical(style);
-        for(View v:candidates)if(v.settings.enabled()&&!v.styles.isEmpty()&&v.styles.contains(style)){
+        for(View v:candidates)if(v.settings.enabled()&&!v.styles.isEmpty()&&matchesNativeStyle(v.styles,style)){
             Junction j=v.junction;
             if(v.scissors!=null){if(v.scissors.owns(j,railId,p))return true;continue;}
             if(j.kind()==Junction.Kind.DIAMOND){
@@ -321,6 +321,15 @@ public final class PointClient {
             }
             if(inWindow(j,v,railId,p,margin))return true;
         }return false;
+    }
+    /** MTR's flat rail callback reports the legacy `default` id even when the active
+     * renderer/profile is represented by default_3d (or its siding variant). Treat the
+     * three built-in names as one native hand-off family so a generated turnout never
+     * leaves a default-material cell visible beside its replacement mesh. */
+    private static boolean matchesNativeStyle(Set<String> styles,String style){
+        if(styles.contains(style))return true;
+        if(!Set.of("default","default_3d","default_3d_siding").contains(style))return false;
+        return styles.contains("default")||styles.contains("default_3d")||styles.contains("default_3d_siding");
     }
     private static void choose(View v){
         if(v.junction.kind()==Junction.Kind.DIAMOND)return;List<PointNetwork.Movement> candidates;

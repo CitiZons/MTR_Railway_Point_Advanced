@@ -4,7 +4,6 @@ import com.mojang.blaze3d.vertex.*;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.*;
-import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.AABB;
@@ -56,16 +55,15 @@ final class PointGpu implements AutoCloseable {
             var group=new Group(q.surface().texture(),lod,lod<0?0:(int)Math.floor(c.x()/4),lod<0?0:(int)Math.floor(c.y()/4),lod<0?0:(int)Math.floor(c.z()/4));groups.computeIfAbsent(group,k->new ArrayList<>()).add(i);}
         var lights=bakedLight;var mc=Minecraft.getInstance();
         for(var entry:groups.entrySet()){
-            BufferBuilder b=STAGING;b.begin(VertexFormat.Mode.QUADS,DefaultVertexFormat.NEW_ENTITY);
+            BufferBuilder b=STAGING;b.begin(VertexFormat.Mode.QUADS,DefaultVertexFormat.POSITION_COLOR_TEX_LIGHTMAP);
             for(int id:entry.getValue()){
-                var q=source.quads.get(id);var s=q.surface();V3 a=q.b().sub(q.a()),c=q.c().sub(q.a());
-                V3 n=new V3(a.y()*c.z()-a.z()*c.y(),a.z()*c.x()-a.x()*c.z(),a.x()*c.y()-a.y()*c.x()).unit();
+                var q=source.quads.get(id);var s=q.surface();
                 V3 center=q.center();long key=BlockPos.containing(center.x(),center.y()+.3,center.z()).asLong();
                 int light=lights.computeIfAbsent(key,k->LevelRenderer.getLightColor(mc.level,BlockPos.of(k)));
                 for(int i=0;i<4;i++){
                     V3 v=switch(i){case 0->q.a();case 1->q.b();case 2->q.c();default->q.d();};
                     float u=q.uv()==null?(i==0||i==3?s.u0():s.u1()):q.uv().get(i*2),vv=q.uv()==null?(i<2?s.v0():s.v1()):q.uv().get(i*2+1);
-                    b.vertex(v.x()-origin.x(),v.y()-origin.y(),v.z()-origin.z()).color(s.color()).uv(u,vv).overlayCoords(OverlayTexture.NO_OVERLAY).uv2(light).normal((float)n.x(),(float)n.y(),(float)n.z()).endVertex();vertices++;
+                    b.vertex(v.x()-origin.x(),v.y()-origin.y(),v.z()-origin.z()).color(s.color()).uv(u,vv).uv2(light).endVertex();vertices++;
                 }
             }
             VertexBuffer gpu=new VertexBuffer(VertexBuffer.Usage.STATIC);gpu.bind();gpu.upload(b.end());VertexBuffer.unbind();
@@ -77,10 +75,19 @@ final class PointGpu implements AutoCloseable {
     void draw(RenderLevelStageEvent e){
         if(bounds==null||!e.getFrustum().isVisible(bounds))return;
         var camera=e.getCamera().getPosition();Matrix4f pose=new Matrix4f(e.getPoseStack().last().pose()).translate((float)(origin.x()-camera.x),(float)(origin.y()-camera.y),(float)(origin.z()-camera.z));
-        draw(fixed,pose,e.getProjectionMatrix());draw(moving,pose,e.getProjectionMatrix());
+        var distances=RailLod.distances();
+        draw(fixed,pose,e.getProjectionMatrix(),camera,distances);draw(moving,pose,e.getProjectionMatrix(),camera,distances);
     }
-    private static void draw(List<Batch> batches,Matrix4f pose,Matrix4f projection){
-        for(var b:batches){if(b.lod>=0&&RailLod.level(b.center)!=b.lod)continue;b.type.setupRenderState();b.buffer.bind();b.buffer.drawWithShader(pose,projection,RenderSystem.getShader());VertexBuffer.unbind();b.type.clearRenderState();draws++;submittedFaces+=b.faces;if(b.lod>=0)lodDraws[b.lod]++;}
+    private static void draw(List<Batch> batches,Matrix4f pose,Matrix4f projection,net.minecraft.world.phys.Vec3 camera,RailDetailDistances distances){
+        for(var b:batches){
+            if(b.lod>=0){double x=b.center.x()-camera.x,y=b.center.y()-camera.y,z=b.center.z()-camera.z;if(distances.level(x*x+y*y+z*z)!=b.lod)continue;}
+            b.type.setupRenderState();b.buffer.bind();b.buffer.drawWithShader(pose,projection,RenderSystem.getShader());VertexBuffer.unbind();b.type.clearRenderState();draws++;submittedFaces+=b.faces;if(b.lod>=0)lodDraws[b.lod]++;
+        }
+    }
+    /** Compatibility entry point retained for the isolated runtime probe. */
+    static void draw(List<Batch> batches,Matrix4f pose,Matrix4f projection){
+        var camera=Minecraft.getInstance().gameRenderer.getMainCamera().getPosition();
+        draw(batches,pose,projection,camera,RailLod.distances());
     }
     public void close(){fixed.forEach(b->b.buffer.close());moving.forEach(b->b.buffer.close());fixed.clear();moving.clear();source=null;bounds=null;}
 }
