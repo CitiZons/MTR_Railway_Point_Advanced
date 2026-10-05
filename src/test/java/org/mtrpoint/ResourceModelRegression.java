@@ -14,8 +14,11 @@ final class ResourceModelRegression {
         if(pack==null){System.out.println("RESOURCE_MODELS: SKIPPED external Citizons Railway pack not found; set CITIZONS_RAILWAY_PACK to its directory");return;}
         JsonObject descriptor=JsonParser.parseString(Files.readString(pack.resolve("citizons_railway/rail_profiles/citizons_mainline_1435.json"))).getAsJsonObject();
         ObjTemplate.Reader reader=id->{String[] parts=id.split(":",2);return Files.readString(pack.resolve(parts[0]).resolve(parts[1]));};
+        continuousSupports(pack,reader);
+        slabSeats(pack,reader);
         String model=descriptor.get("model").getAsString();var loaded=ProfileModel.read(descriptor,model,"",true,reader);var detail=loaded.detail();
         StockFittingRegression.run(detail);
+        TurnoutOverlapRegression.run(detail);
         require(detail.rails().size()==28&&!detail.nativeAtlas(),"Custom section did not load its detailed profile");
         require(!loaded.attachments().isEmpty()&&!loaded.supports().isEmpty(),"Ballast/support roles missing");
         require(detail.bearers().size()>100&&detail.fittings().size()>300,"Detailed supports did not load");
@@ -58,6 +61,82 @@ final class ResourceModelRegression {
             Path assets=Path.of(root).resolve("assets");if(Files.isDirectory(assets))return assets;
         }
         return null;
+    }
+    private static void continuousSupports(Path pack,ObjTemplate.Reader reader)throws Exception{
+        JsonObject descriptor=JsonParser.parseString(Files.readString(pack.resolve("citizons_railway/rail_profiles/citizons_direct_1435.json"))).getAsJsonObject();
+        for(String level:List.of("near","mid","far")){
+            String model=descriptor.getAsJsonObject("lod").getAsJsonObject(level).get("model").getAsString();
+            JsonObject variant=descriptor.deepCopy();variant.addProperty("model",model);
+            var loaded=ProfileModel.read(variant,model,"",true,reader);
+            require(!loaded.attachments().isEmpty()&&loaded.attachments().stream().allMatch(q->q.part().equals("track_bed")),"Continuous strips must survive turnout suppression");
+            require(loaded.supports().stream().noneMatch(q->q.part().equals("direct_bearer")),"Continuous strips must not move with sleeper layout");
+            var detail=loaded.detail();var p=new Profile(1.435,.26428,.068,.14,.165,Profile.STEEL,Profile.TIMBER,"direct",true,detail);
+            Mesh rows=new Mesh();detail.bearer(rows,V3.ZERO,new V3(1,0,0),-2,4,PointSettings.DEFAULT,p,0,true);
+            require(rows.quads.isEmpty(),"Turnout must not stretch longitudinal strips into transverse ties");
+            Mesh guardSupport=new Mesh();TurnoutFittings.guardPair(guardSupport,V3.ZERO,new V3(.22,0,0),new V3(1,0,0),p,PointSettings.DEFAULT,0);
+            var concrete=guardSupport.quads.stream().filter(q->q.part().equals("track_bed")).toList();
+            require(!concrete.isEmpty(),"Guard support concrete missing");
+            double maxY=concrete.stream().flatMap(q->java.util.stream.Stream.of(q.a(),q.b(),q.c(),q.d())).mapToDouble(V3::y).max().orElseThrow();
+            require(Math.abs(maxY-detail.bearerTop())<1e-9,"Guard concrete has a different top height from the strip");
+            for(var q:concrete)require(detail.bearers().stream().anyMatch(original->original.surface().equals(q.surface())&&original.uv().equals(q.uv())),"Guard concrete lost the original texture/UV");
+            var a=new RailSweep(V3.ZERO,new V3(0,0,.6),new V3(0,0,1),new V3(.1,0,1).unit(),0,0);
+            var b=new RailSweep(a.b(),new V3(.1,0,1.2),a.tangentB(),new V3(.2,0,1).unit(),0,0);
+            for(double x:new double[]{-.7515-.261,-.7515+.261,.7515-.261,.7515+.261})
+                require(a.model(new V3(x,detail.bearerTop(),.3),false,0,-.3,.3).distance(b.model(new V3(x,detail.bearerTop(),-.3),false,0,-.3,.3))<1e-9,"Curved support cells must meet");
+        }
+        System.out.println("CONTINUOUS_SUPPORTS: PASS all LODs preserve strips, omit transverse ties and join curved cells");
+    }
+    private static void slabSeats(Path pack,ObjTemplate.Reader reader)throws Exception{
+        var profiles=new ArrayList<Profile>();
+        for(String name:List.of("mainline","slab","direct")){
+            var descriptor=JsonParser.parseString(Files.readString(pack.resolve("citizons_railway/rail_profiles/citizons_"+name+"_1435.json"))).getAsJsonObject();
+            var detail=ProfileModel.read(descriptor,descriptor.get("model").getAsString(),"",true,reader).detail();
+            profiles.add(new Profile(1.435,.26428,.068,.14,.165,Profile.STEEL,Profile.TIMBER,name,true,detail));
+        }
+        List<Mesh.Quad> expected=null;
+        Track road=new Track("guard-seats","a","b",List.of(V3.ZERO,new V3(0,0,10)));
+        for(Profile p:profiles){
+            double offset=p.centerOffset()-p.headWidth()-.04;
+            var guard=new GuardRails.Run(road,1,9,offset,false,false,p,PointSettings.DEFAULT);
+            V3 row=road.at(5),n=road.tangent(5).lateral(),running=row.add(n.mul(p.centerOffset())),check=guard.point(5);
+            var seats=new FittingSeats();seats.add(running,n,true);seats.add(check,n,false);
+            Mesh actual=new Mesh();TurnoutFittings.guardsAtRow(actual,seats,List.of(guard,guard),row,n,p,PointSettings.DEFAULT,17);
+            // A later road arm must not reintroduce a normal fastening on the common plate.
+            seats.add(running,n,true);seats.add(check,n,false);seats.emitTurnout(actual,p,PointSettings.DEFAULT,17,"normal");
+            Mesh one=new Mesh();TurnoutFittings.guardPair(one,running,check,n,p,PointSettings.DEFAULT,17);
+            var hardware=actual.quads.stream().filter(q->q.part().startsWith("fastener")).toList();
+            require(hardware.equals(one.quads.stream().filter(q->q.part().startsWith("fastener")).toList()),"Guard rows duplicate ordinary fittings or repeated guard brackets: "+p.source());
+            if(expected==null)expected=hardware;else require(expected.equals(hardware),"Slab guard fittings differ from ballast in geometry, material or UV: "+p.source());
+        }
+        Profile slab=profiles.get(1);ModelDetail detail=slab.detail();
+        Junction parityJunction=Detector.find(Regression.y().subList(0,2)).get(0);
+        for(int mode=0;mode<=4;mode++){
+            Set<Mesh.Quad> reference=null;
+            for(Profile p:profiles){
+                Mesh full=PointMesh.build(parityJunction,PointSettings.DEFAULT.with(16,mode),p,0);
+                Set<Mesh.Quad> hardware=new HashSet<>(full.quads.stream().filter(q->q.part().startsWith("fastener")).toList());
+                if(reference==null)reference=hardware;
+                else require(reference.equals(hardware),"Full turnout fitting mismatch for "+p.source()+" mode="+mode+" reference="+reference.size()+" actual="+hardware.size());
+            }
+            System.out.println("TURNOUT_FITTING_PARITY: PASS mode="+mode+" faces="+reference.size()+" mainline/slab/direct");
+        }
+        Mesh stretched=new Mesh();detail.bearer(stretched,V3.ZERO,new V3(1,0,0),-2,5,PointSettings.DEFAULT,slab,0,true);
+        require(stretched.quads.isEmpty(),"Slab turnout still stretches twin blocks as a long bearer");
+        var seats=new FittingSeats();V3 n=new V3(.8,0,.6),along=new V3(n.z(),0,-n.x());
+        var centers=List.of(n.mul(-1.8),n.mul(-.65),n.mul(.75),n.mul(3.2));
+        for(var center:centers)seats.add(center,n,false);
+        Mesh placed=new Mesh();seats.emitTurnout(placed,slab,PointSettings.DEFAULT,23,"normal");
+        var blocks=placed.quads.stream().filter(q->q.part().equals("sleeper")).toList();
+        int faces=(int)detail.bearers().stream().filter(q->q.center().x()>0).count();
+        require(blocks.size()==faces*centers.size(),"Each fitting seat must have one complete block");
+        for(int i=0;i<centers.size();i++){
+            V3 center=centers.get(i);var vertices=blocks.subList(i*faces,(i+1)*faces).stream().flatMap(q->java.util.stream.Stream.of(q.a(),q.b(),q.c(),q.d())).toList();
+            double lo=vertices.stream().mapToDouble(v->v.sub(center).dot(n)).min().orElseThrow(),hi=vertices.stream().mapToDouble(v->v.sub(center).dot(n)).max().orElseThrow();
+            double zlo=vertices.stream().mapToDouble(v->v.sub(center).dot(along)).min().orElseThrow(),zhi=vertices.stream().mapToDouble(v->v.sub(center).dot(along)).max().orElseThrow();
+            require(Math.abs(lo+.34)<1e-8&&Math.abs(hi-.34)<1e-8,"Slab shoulders drift from their actual fitting seat");
+            require(Math.abs(zlo+.107)<1e-8&&Math.abs(zhi-.107)<1e-8,"Slab shoulder length differs from the fastening");
+        }
+        System.out.println("SLAB_SEATS: PASS identical guard hardware for all beds, replacement/deduplication, complete blocks aligned to four diverging fitting seats");
     }
     private static void continuous(){
         int points=0;double worst=0;

@@ -8,7 +8,10 @@ public final class EndSleepers {
     public static void finish(Mesh mesh,Junction j,PointSettings s,Profile p,PointMesh.YBoundary boundary){
         if(p.detail()!=null&&p.detail().siding())return; // This native model has fittings but no bearers.
         double[] lasts=j.third()==null?new double[]{boundary.aLast(),boundary.bLast()}:new double[]{boundary.aLast(),boundary.thirdLast(),boundary.bLast()};
-        var supports=mesh.quads.stream().filter(q->q.part().equals("sleeper")).toList();
+        // Continuous beds have no sleeper faces. Measure their installed hardware,
+        // using the same coverage rule for every custom turnout bed.
+        boolean fittings=TurnoutFittings.applicable(p);
+        var supports=mesh.quads.stream().filter(q->fittings?q.part().startsWith("fastener"):q.part().equals("sleeper")).toList();
         int index=mesh.quads.stream().mapToInt(Mesh.Quad::index).max().orElse(0)+1;
         for(int branch=0;branch<j.tracks().size();branch++){
             Track road=j.tracks().get(branch);double last=lasts[branch];double[] coveredSeats={0,0};

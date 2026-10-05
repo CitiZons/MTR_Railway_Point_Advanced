@@ -10,7 +10,8 @@ public final class TurnoutFittings {
         return p.detail()!=null&&!p.detail().nativeAtlas()&&!p.detail().siding()
             &&!p.detail().rails().isEmpty()&&!p.detail().bearers().isEmpty()&&!p.detail().fittings().isEmpty();
     }
-    private static double bearer(Profile p,PointSettings s){return p.top()-p.detail().railTop()+p.detail().bearerTop()+s.verticalOffset();}
+    private static double bearer(Profile p,PointSettings s){return p.top()-p.detail().railTop()+s.verticalOffset()+p.detail().fittings().stream()
+        .flatMap(q->Stream.of(q.a(),q.b(),q.c(),q.d())).mapToDouble(V3::y).min().orElse(p.detail().bearerTop());}
     private static double foot(Profile p,PointSettings s){
         return p.top()-p.detail().railTop()+s.verticalOffset()+p.detail().rails().stream()
             .flatMap(q->Stream.of(q.a(),q.b(),q.c(),q.d())).mapToDouble(V3::y).min().orElseThrow();
@@ -18,8 +19,9 @@ public final class TurnoutFittings {
     /** Sample metal UVs from the fitting, not the middle of its whole atlas. */
     private static Profile.Surface metal(Profile p){
         ModelDetail d=p.detail();
+        double fittingBase=d.fittings().stream().flatMap(q->Stream.of(q.a(),q.b(),q.c(),q.d())).mapToDouble(V3::y).min().orElseThrow();
         Mesh.Quad sample=d.fittings().stream().filter(q->q.uv()!=null)
-            .filter(q->Math.abs(q.center().x()-d.railCenter())>.08&&q.center().y()>d.bearerTop()+.04)
+            .filter(q->Math.abs(q.center().x()-d.railCenter())>.08&&q.center().y()>fittingBase+.04)
             .findFirst().orElse(d.fittings().get(0));
         List<Float> uv=sample.uv()==null?Mesh.centerUv(sample.surface()):sample.uv();
         float u=0,v=0;for(int i=0;i<8;i+=2){u+=uv.get(i)/4;v+=uv.get(i+1)/4;}
@@ -32,6 +34,8 @@ public final class TurnoutFittings {
         boolean slide=zone.equals("blade");
         double margin=p.footWidth()/2+.065+(slide?s.throwDistance():0);
         V3 a=lo.sub(n.mul(margin)),b=hi.add(n.mul(margin));
+        double extension=Math.max(0,margin-.19);
+        p.detail().seatBearer(mesh,lo,n,-extension,hi.sub(lo).dot(n)+extension,s,p,index);
         Profile.Surface surface=metal(p);double base=bearer(p,s),top=foot(p,s);
         box(mesh,a,b,Math.min(.22,s.sleeperWidth()*.9),base,top,surface,p,index,2);
         // Anchors stay beyond the swept feet; the sliding surface remains smooth.
@@ -52,6 +56,19 @@ public final class TurnoutFittings {
         if(!applicable(p)||running.distance(guard)<.04)return;
         V3 delta=guard.sub(running),n=new V3(delta.x(),0,delta.z()).unit(),f=n.lateral();
         Profile.Surface surface=metal(p);double base=bearer(p,s),top=foot(p,s);
+        if(p.detail().bearers().stream().allMatch(q->q.part().equals("track_bed"))){
+            var faces=p.detail().bearers().stream().filter(q->q.center().x()>0).toList();
+            if(!faces.isEmpty()){
+                double lo=faces.stream().flatMap(q->Stream.of(q.a(),q.b(),q.c(),q.d())).mapToDouble(V3::x).min().orElseThrow();
+                double hi=faces.stream().flatMap(q->Stream.of(q.a(),q.b(),q.c(),q.d())).mapToDouble(V3::x).max().orElseThrow();
+                double margin=Math.max(p.detail().halfBearer()-p.detail().railCenter(),.23),width=running.distance(guard)+2*margin;
+                V3 origin=running.sub(n.mul(margin));
+                java.util.function.Function<V3,V3> transform=v->origin.add(n.mul((v.x()-lo)/(hi-lo)*width))
+                    .add(f.mul(v.z()*(s.sleeperSpacing()+.02)/(p.detail().zMax()-p.detail().zMin())))
+                    .add(0,v.y()+p.top()-p.detail().railTop()+s.verticalOffset(),0);
+                for(var q:faces)mesh.quad(new Mesh.Quad(transform.apply(q.a()),transform.apply(q.b()),transform.apply(q.c()),transform.apply(q.d()),q.surface(),"track_bed",index,q.uv()));
+            }
+        }
         box(mesh,running.sub(n.mul(.21)),guard.add(n.mul(.20)),Math.min(.22,s.sleeperWidth()*.9),base,top,surface,p,index,2);
         outerClamp(mesh,running,n.mul(-1),p,s,index);
         box(mesh,guard.add(n.mul(.013)),guard.add(n.mul(.024)),.16,top+.036,top+.10,surface,p,index,2);
@@ -73,7 +90,7 @@ public final class TurnoutFittings {
             V3 check=run.point(at);
             if(near<run.start()-.2||near>run.end()+.2||Math.abs(check.sub(center).dot(forward))>s.sleeperWidth()/2)continue;
             V3 running=run.road().at(at).add(run.road().tangent(at).lateral().mul(Math.signum(run.offset())*p.centerOffset()));
-            if(seats!=null){seats.excludeNear(running,.2);seats.excludeNear(check,.2);}
+            if(seats!=null&&!seats.guardPair(running,check))continue;
             guardPair(mesh,running,check,normal,p,s,index);
         }
     }

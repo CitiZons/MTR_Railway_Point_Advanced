@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.*;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.*;
+import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.AABB;
@@ -27,7 +28,7 @@ final class PointGpu implements AutoCloseable {
     static final long[] lodDraws=new long[3];
     /** Parts the per-view draw hides because the shared component assembly owns them instead. */
     static boolean hiddenInView(Mesh.Quad q){
-        String part=q.part();return part.equals("guard")||part.equals("sleeper")||part.startsWith("fastener")||part.equals("wing");
+        String part=q.part();return part.equals("guard")||part.equals("sleeper")||part.equals("track_bed")||part.startsWith("fastener")||part.equals("wing");
     }
     void update(Mesh mesh,double position,boolean movable,boolean removeGuards){
         var mc=Minecraft.getInstance();long tick=mc.level.getGameTime();boolean changed=source!=mesh;
@@ -55,15 +56,21 @@ final class PointGpu implements AutoCloseable {
             var group=new Group(q.surface().texture(),lod,lod<0?0:(int)Math.floor(c.x()/4),lod<0?0:(int)Math.floor(c.y()/4),lod<0?0:(int)Math.floor(c.z()/4));groups.computeIfAbsent(group,k->new ArrayList<>()).add(i);}
         var lights=bakedLight;var mc=Minecraft.getInstance();
         for(var entry:groups.entrySet()){
-            BufferBuilder b=STAGING;b.begin(VertexFormat.Mode.QUADS,DefaultVertexFormat.POSITION_COLOR_TEX_LIGHTMAP);
+            BufferBuilder b=STAGING;b.begin(VertexFormat.Mode.QUADS,DefaultVertexFormat.NEW_ENTITY);
             for(int id:entry.getValue()){
                 var q=source.quads.get(id);var s=q.surface();
+                V3 ab=q.b().sub(q.a()),ac=q.c().sub(q.a());
+                V3 n=new V3(ab.y()*ac.z()-ab.z()*ac.y(),ab.z()*ac.x()-ab.x()*ac.z(),ab.x()*ac.y()-ab.y()*ac.x()).unit();
                 V3 center=q.center();long key=BlockPos.containing(center.x(),center.y()+.3,center.z()).asLong();
                 int light=lights.computeIfAbsent(key,k->LevelRenderer.getLightColor(mc.level,BlockPos.of(k)));
                 for(int i=0;i<4;i++){
                     V3 v=switch(i){case 0->q.a();case 1->q.b();case 2->q.c();default->q.d();};
                     float u=q.uv()==null?(i==0||i==3?s.u0():s.u1()):q.uv().get(i*2),vv=q.uv()==null?(i<2?s.v0():s.v1()):q.uv().get(i*2+1);
-                    b.vertex(v.x()-origin.x(),v.y()-origin.y(),v.z()-origin.z()).color(s.color()).uv(u,vv).uv2(light).endVertex();vertices++;
+                    // The resource pack intentionally places the bed top on the block
+                    // plane. Lift only support faces by a tiny epsilon to win the depth
+                    // test against the coplanar world surface and prevent z-fighting.
+                    double depthBias=q.part().equals("track_bed")||q.part().equals("sleeper")||q.part().equals("direct_bearer")?0.00015:0;
+                    b.vertex(v.x()-origin.x(),v.y()-origin.y()+depthBias,v.z()-origin.z()).color(s.color()).uv(u,vv).overlayCoords(OverlayTexture.NO_OVERLAY).uv2(light).normal((float)n.x(),(float)n.y(),(float)n.z()).endVertex();vertices++;
                 }
             }
             VertexBuffer gpu=new VertexBuffer(VertexBuffer.Usage.STATIC);gpu.bind();gpu.upload(b.end());VertexBuffer.unbind();
@@ -81,7 +88,20 @@ final class PointGpu implements AutoCloseable {
     private static void draw(List<Batch> batches,Matrix4f pose,Matrix4f projection,net.minecraft.world.phys.Vec3 camera,RailDetailDistances distances){
         for(var b:batches){
             if(b.lod>=0){double x=b.center.x()-camera.x,y=b.center.y()-camera.y,z=b.center.z()-camera.z;if(distances.level(x*x+y*y+z*z)!=b.lod)continue;}
-            b.type.setupRenderState();b.buffer.bind();b.buffer.drawWithShader(pose,projection,RenderSystem.getShader());VertexBuffer.unbind();b.type.clearRenderState();draws++;submittedFaces+=b.faces;if(b.lod>=0)lodDraws[b.lod]++;
+            b.type.setupRenderState();
+            var shader=RenderSystem.getShader();
+            RenderSystem.setupShaderLights(shader);
+            var light0=shader.getUniform("Light0_Direction");var light1=shader.getUniform("Light1_Direction");
+            org.joml.Vector3f previous0=null,previous1=null;
+            if(light0!=null&&light1!=null){
+                previous0=new org.joml.Vector3f(light0.getFloatBuffer());previous1=new org.joml.Vector3f(light1.getFloatBuffer());
+                // GPU vertices and normals are in world axes. Entity lighting supplied
+                // by the level renderer rotates with the camera, so use world lights.
+                RenderSystem.setShaderLights(new org.joml.Vector3f(.2F,1,-.7F).normalize(),new org.joml.Vector3f(-.2F,1,.7F).normalize());
+            }
+            try{b.buffer.bind();b.buffer.drawWithShader(pose,projection,shader);}
+            finally{VertexBuffer.unbind();if(previous0!=null)RenderSystem.setShaderLights(previous0,previous1);b.type.clearRenderState();}
+            draws++;submittedFaces+=b.faces;if(b.lod>=0)lodDraws[b.lod]++;
         }
     }
     /** Compatibility entry point retained for the isolated runtime probe. */

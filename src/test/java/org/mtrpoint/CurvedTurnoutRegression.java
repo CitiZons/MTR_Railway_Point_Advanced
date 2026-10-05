@@ -79,10 +79,12 @@ final class CurvedTurnoutRegression {
         var faces=mesh.quads.stream().filter(q->q.part().equals("wing")).toList();
         double side=j.b().at(3).sub(j.a().at(3)).dot(j.a().tangent(0).lateral())>0?1:-1;
         for(int branch=0;branch<2;branch++){
-            int base=branch*36*18;V3 incoming=end(faces.get(base+11*18+12)),working=start(faces.get(base+12*18+12));
+            // Swept sections have four longitudinal faces per beam, without
+            // the old two interior end caps. The head top is face eight.
+            int base=branch*36*12;V3 incoming=end(faces.get(base+11*12+8)),working=start(faces.get(base+12*12+8));
             if(incoming.distance(working)>1e-5)throw new AssertionError("Wing knee is disconnected from the incoming curved rail: "+incoming.distance(working));
             Track road=branch==0?j.b():j.a();double sign=branch==0?-side:side;
-            for(int k=12;k<24;k++)for(V3 v:List.of(start(faces.get(base+k*18+12)),end(faces.get(base+k*18+12)))){
+            for(int k=12;k<24;k++)for(V3 v:List.of(start(faces.get(base+k*12+8)),end(faces.get(base+k*12+8)))){
                 double d=road.nearest(v),lateral=v.sub(road.at(d)).dot(road.tangent(d).lateral())*sign;
                 double expected=Profile.STANDARD.centerOffset()-Profile.STANDARD.headWidth()-PointSettings.DEFAULT.flangeway();
                 if(Math.abs(lateral-expected)>.001)throw new AssertionError("Curved wing working gap drift: "+(lateral-expected));

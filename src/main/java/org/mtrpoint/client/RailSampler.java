@@ -205,7 +205,12 @@ public final class RailSampler {
             var raw=frames.get(i);
             V3 ta=raw==null?points.get(i+1).sub(points.get(Math.max(0,i-1))).unit():raw.tangentA();
             V3 tb=raw==null?points.get(Math.min(points.size()-1,i+2)).sub(points.get(i)).unit():raw.tangentB();
-            frames.set(i,new RailSweep(points.get(i),points.get(i+1),ta,tb,raw==null?0:raw.cantA(),raw==null?0:raw.cantB()));
+            if(raw!=null&&i>0&&frames.get(i-1)!=null)ta=frames.get(i-1).tangentB();
+            if(raw!=null&&i+1<frames.size()&&frames.get(i+1)!=null)tb=raw.tangentB().add(frames.get(i+1).tangentA()).unit();
+            double ca=raw==null?0:raw.cantA(),cb=raw==null?0:raw.cantB();
+            if(raw!=null&&i>0&&frames.get(i-1)!=null)ca=frames.get(i-1).cantB();
+            if(raw!=null&&i+1<frames.size()&&frames.get(i+1)!=null)cb=(cb+frames.get(i+1).cantA())/2;
+            frames.set(i,new RailSweep(points.get(i),points.get(i+1),ta,tb,ca,cb));
             cellFrames.put(rawCells.get(i),frames.get(i));
         }
         var result=new ModelFrames(sample,new Track(railId,"a","b",points),List.copyOf(frames),Map.copyOf(cellFrames));MODEL_FRAMES.put(key,result);return result;

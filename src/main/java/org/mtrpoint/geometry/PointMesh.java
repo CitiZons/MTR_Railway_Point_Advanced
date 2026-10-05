@@ -101,7 +101,13 @@ public final class PointMesh {
                     ta=TurnoutFrame.taper(d-localStart,contact);tb=TurnoutFrame.taper(e-localStart,contact);
                     V3 ba=switchRail(r,d,ta,offset,open,localStart,blade,p,s),bb=switchRail(r,e,tb,offset,open,localStart,blade,p,s);
                     if(previous!=null&&previousBlade)ba=previous;
-                    mesh.rail(ba,bb,ta,tb,p,s,"blade");
+                    double derivativeStep=.0001;
+                    V3 na=switchRail(r,d+derivativeStep,TurnoutFrame.taper(d+derivativeStep-localStart,contact),offset,open,localStart,blade,p,s)
+                        .sub(switchRail(r,d-derivativeStep,TurnoutFrame.taper(d-derivativeStep-localStart,contact),offset,open,localStart,blade,p,s)).lateral();
+                    V3 nb=switchRail(r,e+derivativeStep,TurnoutFrame.taper(e+derivativeStep-localStart,contact),offset,open,localStart,blade,p,s)
+                        .sub(switchRail(r,e-derivativeStep,TurnoutFrame.taper(e-derivativeStep-localStart,contact),offset,open,localStart,blade,p,s)).lateral();
+                    if(e>=localStart+blade-1e-9)nb=r.track.tangent(e).lateral();
+                    mesh.rail(ba,bb,na,nb,ta,tb,p,s,"blade");
                     b=bb;
                 } else {
                     b=running(r,e,offset);

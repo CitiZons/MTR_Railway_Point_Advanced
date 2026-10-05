@@ -84,7 +84,11 @@ public final class Regression {
             Mesh heart=PointMesh.build(y,moving,Profile.STANDARD,position);
             var frogFaces=heart.quads.stream().filter(q->q.part().equals("frog")).toList();var wingFaces=heart.quads.stream().filter(q->q.part().equals("wing")).toList();
             V3 tip=frogFaces.get(12).a().lerp(frogFaces.get(12).d(),.5);double contact=Double.MAX_VALUE;
-            for(int k=12;k<wingFaces.size();k+=18){var q=wingFaces.get(k);contact=Math.min(contact,Math.min(segmentDistance(tip,q.a(),q.b()),segmentDistance(tip,q.d(),q.c())));}
+            for(var q:wingFaces){
+                var vertices=List.of(q.a(),q.b(),q.c(),q.d());
+                if(vertices.stream().anyMatch(v->Math.abs(v.y()-Profile.STANDARD.top())>1e-8))continue;
+                contact=Math.min(contact,Math.min(segmentDistance(tip,q.a(),q.b()),segmentDistance(tip,q.d(),q.c())));
+            }
             require(contact<.003,"Movable heart point touches selected wing edge: "+contact);
         }
         require(left.quads.stream().filter(q->q.part().equals("wing")).count()>20,"Continuous wing rail assembly exists");

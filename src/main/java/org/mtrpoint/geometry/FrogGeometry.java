@@ -72,13 +72,15 @@ public final class FrogGeometry {
             V3 end=inner(branch,heel(branch));
             if(s.movableFrog())segment(m,branch==0?rootA:rootB,end,1,1,"frog");
             int road=branch;Wing w=wing(road,gap);
-            sweep(m,t->inner(road,toe(road)+(w.kneeIncoming-toe(road))*t));
+            V3 kneeNormal=track(road).tangent(w.kneeIncoming).lateral().add(track(1-road).tangent(w.kneeOther).lateral()).unit();
+            sweep(m,t->inner(road,toe(road)+(w.kneeIncoming-toe(road))*t),track(road).tangent(toe(road)).lateral(),kneeNormal);
             // Retain preview geometry, but mark the check-side wing for replacement by the
             // world interval pool. Its incoming closure and knee extension stay connected.
             if(!editableCheckWings||!s.guardEdits().containsKey(2+road)){
                 int first=m.quads.size();
-                sweep(m,t->wingPoint(1-road,w.kneeOther+(w.endAt-w.kneeOther)*t,gap,0));
-                sweep(m,t->wingPoint(1-road,w.endAt+(w.flareAt-w.endAt)*t,gap,.075*t));
+                V3 endNormal=wingPoint(1-road,w.endAt+.01,gap,0).sub(wingPoint(1-road,w.endAt-.01,gap,0)).lateral();
+                sweep(m,t->wingPoint(1-road,w.kneeOther+(w.endAt-w.kneeOther)*t,gap,0),kneeNormal,endNormal);
+                sweep(m,t->wingPoint(1-road,w.endAt+(w.flareAt-w.endAt)*t,gap,.075*t),endNormal,null);
                 V3 mouth=wingPoint(1-road,w.flareAt,gap,.075),before=wingPoint(1-road,w.flareAt-.01,gap,.075);
                 m.railCap(mouth,mouth.sub(before),1,p,s,"wing",false);
                 for(int i=first;i<m.quads.size();i++){
@@ -109,7 +111,15 @@ public final class FrogGeometry {
         return new Wing(a,b,endAt,Math.min(extent,endAt+.3));
     }
     private void sweep(Mesh m,java.util.function.DoubleFunction<V3> path){
-        for(int i=0;i<12;i++)m.rail(path.apply(i/12D),path.apply((i+1)/12D),1,1,p,s,"wing");
+        sweep(m,path,null,null);
+    }
+    private void sweep(Mesh m,java.util.function.DoubleFunction<V3> path,V3 startNormal,V3 endNormal){
+        for(int i=0;i<12;i++){
+            double a=i/12D,b=(i+1)/12D;
+            V3 na=i==0&&startNormal!=null?startNormal:path.apply(a+.0001).sub(path.apply(a-.0001)).lateral();
+            V3 nb=i==11&&endNormal!=null?endNormal:path.apply(b+.0001).sub(path.apply(b-.0001)).lateral();
+            m.rail(path.apply(a),path.apply(b),na,nb,1,1,p,s,"wing");
+        }
     }
     private void fixedHeart(Mesh m,V3 center,V3 forward,double sine){
         // Keep both original rail sections at full width. Trim their overlap at the common

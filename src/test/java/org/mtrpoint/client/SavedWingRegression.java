@@ -19,6 +19,30 @@ public final class SavedWingRegression {
             fixture=AppearanceData.JSON.fromJson(new InputStreamReader(stream,StandardCharsets.UTF_8),Fixture.class);
         }catch(IOException ex){throw new AssertionError(ex);}
         var tracks=fixture.roads.stream().map(r->new Track(r.id,r.startNode,r.endNode,r.points)).toList();
+        var leftCurve=new ArrayList<V3>();var rightCurve=new ArrayList<V3>();
+        for(int z=0;z<=40;z++){leftCurve.add(new V3(-.002*z*z,0,z));rightCurve.add(new V3(.005*z*z,0,z));}
+        for(var junction:Detector.find(List.of(new Track("knee-left","origin","left",leftCurve),new Track("knee-right","origin","right",rightCurve))))if(junction.kind()==Junction.Kind.Y){
+            var isolated=PointRenderer.viewsForTest(List.of(junction),PointSettings.DEFAULT,Profile.STANDARD);
+            Mesh source=isolated.get(0).mesh(),finalMesh=PointRenderer.worldForTest(isolated);
+            var outgoing=new ArrayList<V3>();var incoming=new ArrayList<V3>();
+            for(var q:source.quads)if(q.part().equals("wing"))for(var v:List.of(q.a(),q.b(),q.c(),q.d()))
+                if(Math.abs(v.y()-Profile.STANDARD.top())<1e-8)(q.index()==-2?outgoing:incoming).add(v);
+            int seam=0;
+            var frog=new FrogGeometry(junction,PointSettings.DEFAULT,Profile.STANDARD,PointMesh.extent(junction,PointSettings.DEFAULT));
+            var knees=List.of(frog.checkWing(0),frog.checkWing(1)).stream().map(r->r.center(r.start()).add(0,Profile.STANDARD.top(),0)).toList();
+            for(var v:incoming)if(outgoing.stream().anyMatch(w->w.distance(v)<1e-8)){
+                seam++;
+                V3 center=knees.stream().min(Comparator.comparingDouble(v::distance)).orElseThrow();
+                V3 edge=center.lerp(v,.95),forward=v.sub(center).lateral();
+                for(double advance:new double[]{-.0001,0,.0001}){
+                    V3 sample=edge.add(forward.mul(advance));
+                    if(!ReviewFixRegression.at(finalMesh,sample.x(),sample.z(),sample.y()))
+                        throw new AssertionError("Final wing assembly opens its head edge at the knee: "+sample);
+                }
+            }
+            if(seam<4)throw new AssertionError("Missing full-width knee section fixture");
+            break;
+        }
         var p=Profile.STANDARD;var views=PointRenderer.viewsForTest(Detector.find(tracks),PointSettings.DEFAULT,p);
         for(var view:views)if(fixture.appearances.containsKey(view.junction.id()))view.settings=fixture.appearances.get(view.junction.id()).value();
         PointClient.refreshCrossings(views,tracks);Mesh world=PointRenderer.worldForTest(views);

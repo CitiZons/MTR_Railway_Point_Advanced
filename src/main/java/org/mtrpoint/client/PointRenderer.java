@@ -13,6 +13,13 @@ public final class PointRenderer {
     private static List<PointClient.View> knownViews=List.of();
     private static final Map<List<GuardSource>,Mesh> ASSEMBLIES=new LinkedHashMap<>();
     private static final Map<Mesh,PointGpu> ASSEMBLY_GPU=new IdentityHashMap<>();
+    private static final Map<Mesh,List<Mesh.Quad>> ASSEMBLY_BEDS=new IdentityHashMap<>();
+    private static boolean originalWings(GuardSource s,List<GuardSource> component){
+        // Crossing components still need the common interval pool to resolve terminal ownership.
+        if(component.stream().anyMatch(other->other.view.junction.kind()==Junction.Kind.DIAMOND))return false;
+        return s.view.junction.kind()==Junction.Kind.Y?!s.settings.guardEdits().containsKey(2)&&!s.settings.guardEdits().containsKey(3)
+            :s.view.junction.kind()==Junction.Kind.THREE&&s.settings.guardEdits().isEmpty();
+    }
     private record Bounds(double x0,double x1,double z0,double z1){
         boolean overlaps(Bounds b){return x0<=b.x1&&b.x0<=x1&&z0<=b.z1&&b.z0<=z1;}
     }
@@ -42,6 +49,7 @@ public final class PointRenderer {
         var retained=new LinkedHashMap<List<GuardSource>,Mesh>();Mesh combined=new Mesh();
         for(var component:components){Mesh mesh=ASSEMBLIES.get(component);if(mesh==null){mesh=assemble(component);guardBuilds++;}retained.put(component,mesh);combined.quads.addAll(mesh.quads);}
         ASSEMBLIES.clear();ASSEMBLIES.putAll(retained);var meshes=new HashSet<>(retained.values());
+        ASSEMBLY_BEDS.keySet().retainAll(meshes);
         for(var it=ASSEMBLY_GPU.entrySet().iterator();it.hasNext();){var entry=it.next();if(!meshes.contains(entry.getKey())){entry.getValue().close();it.remove();}}
         GUARDS.update(combined,0);
     }
@@ -56,7 +64,9 @@ public final class PointRenderer {
             for(var original:GuardRails.assembled(source.view.junction,source.settings,source.profile,source.group,
                 source.view.junction.kind()==Junction.Kind.THREE?RailSampler.yBoundary(source.view.junction,source.settings):null)){
                 GuardRails.Run run=original;
-                if(run!=null)runs.add(run);
+                // The frog already sweeps both sides of this knee with one common section.
+                // A separately sampled pooled wing discards that section and opens its edges.
+                if(run!=null&&!(originalWings(source,next)&&(run.attachedStart()||run.attachedEnd())))runs.add(run);
             }
         }
         // The pool holds check steel from every source at once, so it is cut once against the whole
@@ -71,14 +81,17 @@ public final class PointRenderer {
             Mesh check=new Mesh();
             for(var q:source.view.mesh().quads){
                 if(q.part().startsWith("fastener_"))fasteners.add(new Mesh.Quad(q.a(),q.b(),q.c(),q.d(),q.surface(),q.part(),-1,q.uv()));
-                else if(q.part().equals("sleeper")||q.part().equals("fastener"))supports.quad(q);
-                else if(q.part().equals("wing")&&source.view.junction.kind()!=Junction.Kind.DIAMOND&&q.index()!=-2)check.quad(q);
+                else if(q.part().equals("sleeper")||q.part().equals("fastener")||q.part().equals("track_bed"))supports.quad(q);
+                else if(q.part().equals("wing")&&source.view.junction.kind()!=Junction.Kind.DIAMOND&&(q.index()!=-2||originalWings(source,next)))check.quad(q);
             }
             // These are incoming closure wings, joined to their route rails. Cutting them by
             // running-head overlap amputates their knees. Every road's flange channels still cut.
             supports.quads.addAll(DiamondGeometry.cutSteel(check,cutters,tuned,source.settings,tuned.top()+source.settings.verticalOffset(),source.view.drawnRoads(),false).quads);
         }
         supports.quads.addAll(merged.quads);merged=SurfaceUnion.build(supports);merged.quads.addAll(fasteners);
+        var beds=merged.quads.stream().filter(q->q.part().equals("track_bed")).toList();
+        merged.quads.removeIf(q->q.part().equals("track_bed"));
+        if(!beds.isEmpty())ASSEMBLY_BEDS.put(merged,beds);
         return merged;
     }
     /** Test access to the exact final assembly the frame renderer submits. */
@@ -125,6 +138,9 @@ public final class PointRenderer {
     public static void render(){
         var mc=net.minecraft.client.Minecraft.getInstance();if(mc.level==null||mc.player==null){clear();return;}
         if(mc.screen instanceof BlueprintScreen||mc.screen instanceof PointSelectionScreen){RailCellCache.discard();return;}
+        var active=PointClient.views.stream().filter(v->!v.styles.isEmpty()&&v.settings.enabled()).toList();
+        guards(active);
+        for(Mesh mesh:ASSEMBLIES.values())RailCellCache.submitWorldBeds(ASSEMBLY_BEDS.getOrDefault(mesh,List.of()));
         RailCellCache.finish();
     }
     public static void drawGpu(net.minecraftforge.client.event.RenderLevelStageEvent e){

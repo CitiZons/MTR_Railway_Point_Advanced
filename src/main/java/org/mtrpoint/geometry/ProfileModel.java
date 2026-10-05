@@ -29,6 +29,17 @@ public record ProfileModel(ModelDetail detail,List<Mesh.Quad> attachments,List<M
             guard=new ContinuousGuard(guardRails,obj.select(guardSupportNames),endpoint,length,endpointMin,endpointMax,inset,nose,mode.equals("shared"),guardCenter);
         }
         var fixedNames=new ArrayList<>(obj.groups().keySet());fixedNames.removeAll(supportNames);fixedNames.removeAll(guardNames);var fixed=obj.select(fixedNames);
+        // Slab branches share coplanar bed surfaces at a junction. Mark only the
+        // descriptor's preserved bed for union in the cell renderer (any namespace).
+        boolean continuousSupports=descriptor.has("continuousSupports")&&descriptor.get("continuousSupports").getAsBoolean();
+        if(continuousSupports||descriptor.has("trackBed")&&descriptor.get("trackBed").getAsString().equals("slab")){
+            var bed=new HashSet<>(attachments);
+            fixed=fixed.stream().map(q->bed.contains(q)?bedFace(q):q).toList();
+            attachments=attachments.stream().map(ProfileModel::bedFace).toList();
+        }
+        if(continuousSupports)bearers=bearers.stream().map(ProfileModel::bedFace).toList();
+        else if(descriptor.has("shapedSleepers")&&descriptor.get("shapedSleepers").getAsBoolean())
+            bearers=bearers.stream().map(q->new Mesh.Quad(q.a(),q.b(),q.c(),q.d(),q.surface(),"shaped_sleeper",q.index(),q.uv())).toList();
         if(!guardSupportNames.isEmpty()){var ordinarySupportNames=new ArrayList<>(supportNames);ordinarySupportNames.removeAll(guardSupportNames);supports=obj.select(ordinarySupportNames);}
         if(rails.isEmpty()||bearers.isEmpty()||fittings.isEmpty())throw new IllegalArgumentException("Incomplete rail model roles");
         double zMin=points(rails).mapToDouble(V3::z).min().orElseThrow(),zMax=points(rails).mapToDouble(V3::z).max().orElseThrow();
@@ -48,5 +59,6 @@ public record ProfileModel(ModelDetail detail,List<Mesh.Quad> attachments,List<M
         return new ProfileModel(detail,attachments,fixed,supports,descriptor.has("alignEndpointSleepers")&&descriptor.get("alignEndpointSleepers").getAsBoolean(),guard);
     }
     private static List<String> names(JsonObject o,String key){var out=new ArrayList<String>();for(var item:o.getAsJsonArray(key))out.add(item.getAsString());return out;}
+    private static Mesh.Quad bedFace(Mesh.Quad q){return new Mesh.Quad(q.a(),q.b(),q.c(),q.d(),q.surface(),"track_bed",q.index(),q.uv());}
     private static Stream<V3> points(List<Mesh.Quad> faces){return faces.stream().flatMap(q->Stream.of(q.a(),q.b(),q.c(),q.d()));}
 }

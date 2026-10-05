@@ -7,6 +7,9 @@ import java.util.*;
 /** Small persistent world batches; unchanged frames allocate no transformed vertices or GPU uploads. */
 final class RailCellCache {
     private record Chunk(int x,int y,int z){}
+    // A shared batch lets diverging beds union even across the ordinary 8 m
+    // cache boundary. It rebuilds only when the submitted visible cells change.
+    private static final Chunk BEDS=new Chunk(Integer.MIN_VALUE,0,0);
     private record Cell(List<Mesh.Quad> faces,RailSweep frame,boolean flip,double offset,double zMin,double zMax,V3 shift,boolean swept,double inset,double running,double guard,boolean shared){}
     private static final Map<Chunk,List<Cell>> QUEUED=new LinkedHashMap<>();
     private static final Map<Chunk,Batch> CACHED=new HashMap<>();
@@ -17,13 +20,19 @@ final class RailCellCache {
     static void submit(List<Mesh.Quad> faces,RailSweep sweep,boolean flip,double offset,double zMin,double zMax,V3 shift,boolean swept){
         if(faces.isEmpty())return;V3 p=sweep.a().lerp(sweep.b(),.5);
         Chunk chunk=new Chunk((int)Math.floor(p.x()/8),(int)Math.floor(p.y()/8),(int)Math.floor(p.z()/8));
-        QUEUED.computeIfAbsent(chunk,k->new ArrayList<>()).add(new Cell(faces,sweep,flip,offset,zMin,zMax,shift,swept,0,0,0,false));
+        var bed=faces.stream().filter(q->q.part().equals("track_bed")).toList();
+        if(!bed.isEmpty())QUEUED.computeIfAbsent(BEDS,k->new ArrayList<>()).add(new Cell(bed,sweep,flip,offset,zMin,zMax,shift,swept,0,0,0,false));
+        var other=bed.isEmpty()?faces:faces.stream().filter(q->!q.part().equals("track_bed")).toList();
+        if(!other.isEmpty())QUEUED.computeIfAbsent(chunk,k->new ArrayList<>()).add(new Cell(other,sweep,flip,offset,zMin,zMax,shift,swept,0,0,0,false));
     }
     static void submitGuard(List<Mesh.Quad> faces,RailSweep sweep,boolean flip,double offset,double zMin,double zMax,V3 shift,double inset,double running,double guard,boolean shared){
         if(faces.isEmpty())return;V3 p=sweep.a().lerp(sweep.b(),.5);Chunk chunk=new Chunk((int)Math.floor(p.x()/8),(int)Math.floor(p.y()/8),(int)Math.floor(p.z()/8));
         QUEUED.computeIfAbsent(chunk,k->new ArrayList<>()).add(new Cell(faces,sweep,flip,offset,zMin,zMax,shift,false,inset,running,guard,shared));
     }
     static void discard(){QUEUED.clear();ACTIVE.clear();}
+    static void submitWorldBeds(List<Mesh.Quad> faces){
+        if(!faces.isEmpty())QUEUED.computeIfAbsent(BEDS,k->new ArrayList<>()).add(new Cell(faces,null,false,0,0,0,V3.ZERO,false,0,0,0,false));
+    }
     static void clear(){CACHED.values().forEach(b->b.gpu.close());CACHED.clear();discard();builds=transformedVertices=0;}
     static void finish(){
         frame++;ACTIVE.clear();
@@ -34,10 +43,10 @@ final class RailCellCache {
                 for(Cell cell:batch.cells){
                     Map<V3,V3> mapped=new HashMap<>();java.util.function.Function<V3,V3> transform=p->mapped.computeIfAbsent(p,v->{transformedVertices++;double x=v.x();
                         if(cell.inset>0){double sign=Math.signum(x),weight=cell.shared?Math.max(0,Math.min(1,(cell.running-Math.abs(x))/Math.max(1e-6,cell.running-cell.guard))):1;x-=sign*cell.inset*weight;}
-                        V3 local=new V3(x,v.y(),v.z());return (cell.swept?cell.frame.model(local,cell.flip,cell.offset,cell.zMin,cell.zMax):cell.frame.rigid(local,cell.flip,cell.offset)).add(cell.shift);});
+                        V3 local=new V3(x,v.y(),v.z());return cell.frame==null?local:(cell.swept?cell.frame.model(local,cell.flip,cell.offset,cell.zMin,cell.zMax):cell.frame.rigid(local,cell.flip,cell.offset)).add(cell.shift);});
                     for(var q:cell.faces)mesh.quad(new Mesh.Quad(transform.apply(q.a()),transform.apply(q.b()),transform.apply(q.c()),transform.apply(q.d()),q.surface(),q.part(),-1,q.uv()));
                 }
-                batch.mesh=mesh;builds++;
+                batch.mesh=entry.getKey().equals(BEDS)?SurfaceUnion.build(mesh):mesh;builds++;
             }
             ACTIVE.add(batch);
         }
