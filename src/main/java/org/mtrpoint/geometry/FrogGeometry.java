@@ -140,6 +140,31 @@ public final class FrogGeometry {
             }
         }
     }
+    /** The same full-section V nose used by an ordinary turnout. */
+    public Mesh fixedHeart(){
+        Mesh mesh=new Mesh();V3 center=inner(0,sa).lerp(inner(1,sb),.5);
+        V3 forward=j.a().tangent(sa).add(j.b().tangent(sb)).unit();
+        double sine=Math.max(.04,Math.abs(V3.crossXZ(j.a().tangent(sa),j.b().tangent(sb))));
+        fixedHeart(mesh,center,forward,sine);return mesh;
+    }
+    private V3 fittingTip;
+    public V3 fittingTip(){
+        if(fittingTip==null){V3 forward=fittingForward();
+            fittingTip=fixedHeart().quads.stream().flatMap(q->java.util.stream.Stream.of(q.a(),q.b(),q.c(),q.d()))
+                .filter(v->Math.abs(v.y()-p.top()-s.verticalOffset()-(inner(0,sa).y()+inner(1,sb).y())/2)<.02)
+                .min(java.util.Comparator.comparingDouble(v->v.dot(forward))).orElse(center().add(0,p.top()+s.verticalOffset(),0));
+        }return fittingTip;
+    }
+    public V3 fittingForward(){return j.a().tangent(sa).add(j.b().tangent(sb)).unit();}
+    public double fittingClearLength(){double sine=Math.max(.04,Math.abs(V3.crossXZ(j.a().tangent(sa),j.b().tangent(sb))));return Math.min(1.2,Math.max(.4,p.footWidth()/sine));}
+    public record FittingEdge(V3 origin,V3 outward) {}
+    /** The two outside foot edges enclose only the interior of the V heart. */
+    public FittingEdge fittingEdge(int branch){
+        V3 origin=inner(branch,at(branch)),outward=track(branch).tangent(at(branch)).lateral();
+        V3 inside=inner(0,heel(0)).lerp(inner(1,heel(1)),.5);
+        if(inside.sub(origin).dot(outward)>0)outward=outward.mul(-1);
+        return new FittingEdge(origin.add(outward.mul(p.footWidth()/2)),outward);
+    }
     private void guards(Mesh m,int branch){
         m.quads.addAll(guard(branch).mesh().quads);
     }

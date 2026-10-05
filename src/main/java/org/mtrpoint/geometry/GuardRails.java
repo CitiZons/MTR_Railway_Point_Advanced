@@ -80,6 +80,9 @@ public final class GuardRails {
     /** Every check enters the common interval pool before its terminal bends are drawn. */
     public static List<Run> assembled(Junction j,PointSettings s,Profile raw,ScissorsLayout group,PointMesh.YBoundary boundary){
         var all=selectable(j,s,raw,group,boundary);
+        // The central three-way road already has closure wings. A second guard
+        // in that same corridor is redundant. Keep editor indices stable above.
+        if(j.kind()==Junction.Kind.THREE)return all.stream().filter(r->!r.part().equals("guard")||!r.road().id.equals(j.third().id)).toList();
         // The through-road guards of a scissors come from its turnouts, not from an
         // invented long diamond guard. Explicit edits of the central view still apply.
         if(j.kind()!=Junction.Kind.DIAMOND||group==null)return all;

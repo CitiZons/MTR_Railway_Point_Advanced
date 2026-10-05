@@ -26,6 +26,10 @@ final class PointGpu implements AutoCloseable {
     static long uploads,draws,vertices;
     static long submittedFaces;
     static final long[] lodDraws=new long[3];
+    private static final org.joml.Vector3f WORLD_LIGHT0=new org.joml.Vector3f(.2F,1,-.7F).normalize();
+    private static final org.joml.Vector3f WORLD_LIGHT1=new org.joml.Vector3f(-.2F,1,.7F).normalize();
+    private static final org.joml.Vector3f PREVIOUS_LIGHT0=new org.joml.Vector3f();
+    private static final org.joml.Vector3f PREVIOUS_LIGHT1=new org.joml.Vector3f();
     /** Parts the per-view draw hides because the shared component assembly owns them instead. */
     static boolean hiddenInView(Mesh.Quad q){
         String part=q.part();return part.equals("guard")||part.equals("sleeper")||part.equals("track_bed")||part.startsWith("fastener")||part.equals("wing");
@@ -94,10 +98,8 @@ final class PointGpu implements AutoCloseable {
             var light0=shader.getUniform("Light0_Direction");var light1=shader.getUniform("Light1_Direction");
             org.joml.Vector3f previous0=null,previous1=null;
             if(light0!=null&&light1!=null){
-                previous0=new org.joml.Vector3f(light0.getFloatBuffer());previous1=new org.joml.Vector3f(light1.getFloatBuffer());
-                // GPU vertices and normals are in world axes. Entity lighting supplied
-                // by the level renderer rotates with the camera, so use world lights.
-                RenderSystem.setShaderLights(new org.joml.Vector3f(.2F,1,-.7F).normalize(),new org.joml.Vector3f(-.2F,1,.7F).normalize());
+                previous0=PREVIOUS_LIGHT0;previous1=PREVIOUS_LIGHT1;previous0.set(light0.getFloatBuffer());previous1.set(light1.getFloatBuffer());
+                RenderSystem.setShaderLights(WORLD_LIGHT0,WORLD_LIGHT1);
             }
             try{b.buffer.bind();b.buffer.drawWithShader(pose,projection,shader);}
             finally{VertexBuffer.unbind();if(previous0!=null)RenderSystem.setShaderLights(previous0,previous1);b.type.clearRenderState();}

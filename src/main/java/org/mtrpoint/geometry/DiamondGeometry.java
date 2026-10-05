@@ -62,19 +62,26 @@ public final class DiamondGeometry {
     }
     public static void three(Mesh out,Junction j,PointSettings s,Profile p,double[] starts,double[] ends){
         var rails=new ArrayList<Span>();var channels=new ArrayList<Span>();var checks=new ArrayList<GuardRails.Run>();
+        Mesh hearts=new Mesh();
         record Throat(int road,double sign,double from,double to){}
         var throats=new ArrayList<Throat>();
         double gap=Math.max(.02,s.flangeway()+s.wingGapDelta()),width=Math.max(p.headWidth(),p.footWidth());
         for(int a=0;a<3;a++)for(int b=a+1;b<3;b++){
             Junction pair=new Junction(j.id(),Junction.Kind.Y,j.tracks().get(a),j.tracks().get(b),j.center(),0,0,j.extent());
             FrogGeometry frog=new FrogGeometry(pair,s,p,PointMesh.extent(j,s));double side=TurnoutFrame.side(pair,PointMesh.extent(j,s));
+            Mesh heart=frog.fixedHeart();
+            // Its two own roads define the V exactly like a Y turnout. Only the
+            // third road can cut an additional flange channel through that nose.
+            int third=3-a-b;
+            heart=cutChannels(heart,List.of(j.tracks().get(third)),p,s,p.top()+s.verticalOffset());
+            hearts.quads.addAll(heart.quads);
             for(int local=0;local<2;local++){
                 int road=local==0?a:b;Track t=j.tracks().get(road);double sign=local==0?side:-side;
                 // The incoming closure rail turns at its knee into the opposite route's wing.
                 // Keep that connection instead of placing a detached parallel check beside it.
                 checks.add(frog.checkWing(1-local));
-                checks.add(frog.guard(local));
-                throats.add(new Throat(road,sign,frog.knee(local),frog.crossingStation(local)));
+                if(road!=1)checks.add(frog.guard(local));
+                throats.add(new Throat(road,sign,frog.knee(local),frog.heel(local)));
             }
         }
         for(int road=0;road<3;road++){
@@ -99,6 +106,7 @@ public final class DiamondGeometry {
         var obstacles=List.of(new Steel(running,p.top()+s.verticalOffset(),p,s,j.tracks()));
         for(var run:finishedGuards(originalChecks,obstacles))if(run.end()>run.start()){rails.addAll(path(run,id,id,width));id++;}
         bake(out,rails,own(p,s,channels),List.of(),p,s);
+        out.quads.addAll(SurfaceUnion.build(hearts).quads);
     }
     /** Reserve a fixed pocket for the complete throw of a moving crossing insert. */
     public static Mesh pocket(Mesh source,Mesh left,Mesh right,double top){
@@ -777,7 +785,7 @@ public final class DiamondGeometry {
     private static List<Span> path(GuardRails.Run run,int road,int line,double width){
         int count=Math.max(2,(int)Math.ceil((run.end()-run.start())/.24));var points=new ArrayList<V3>();
         for(int i=0;i<=count;i++)points.add(run.point(run.start()+(run.end()-run.start())*i/count));
-        return spans(points,road,line,width,"wing").stream().map(span->new Span(span.road,span.line,span.a,span.b,span.start,span.end,
+        return spans(points,road,line,width,run.part()).stream().map(span->new Span(span.road,span.line,span.a,span.b,span.start,span.end,
             span.width,span.part,span.first&&!run.attachedStart(),span.last&&!run.attachedEnd(),span.cutter)).toList();
     }
     private static List<Span> spans(List<V3> points,int road,int line,double width,String part){

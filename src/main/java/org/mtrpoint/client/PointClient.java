@@ -13,13 +13,16 @@ public final class PointClient {
     public static final class View {
         public final Junction junction;public PointSettings settings;public Profile profile;public Set<String> styles;public double position,target,previewPosition=Double.NaN;public Mesh mesh;public String state="mtrpoint.idle";private double lastPosition=-1;private PointSettings lastSettings;
         public View(Junction j,PointSettings s,Profile p,Set<String> styles){junction=j;settings=s;profile=p;this.styles=Set.copyOf(styles);}
-        private Mesh left,middle,right;private int[] moving;private double lastFrame=-1;
+        private Mesh left,middle,right,jointSteel;private int[] moving;private double lastFrame=-1;
         public long builds;public ScissorsLayout scissors;public ScissorsLayout shared;
         /** The native repeat cell window of a plain crossing, on both sides of it. */
         public PointMesh.DiamondBoundary diamond;
         /** The native cells a turnout covers: its steel ends on a cell edge, not at the nominal
          *  radius, and the renderer has to hide exactly the cells the steel ends on. */
         public PointMesh.YBoundary boundary;
+        private PointMesh.YBoundary claimedInput,claimedResult;
+        private PointSettings claimedSettings;
+        private Profile claimedProfile;
         /** The crossing point this view belongs to, and the roads it draws there when it owns it. */
         public String region;public List<Track> centreRoads;public boolean centreHidden;
         /** The rails whose flange channels have to cut this view's steel, drawn here or not. */
@@ -54,7 +57,9 @@ public final class PointClient {
         }
         public Mesh mesh(){
             double visual=Double.isFinite(previewPosition)?previewPosition:position;
+            if(!animationVisible())visual=lastPosition>=0?lastPosition:0;
             if(left==null||lastSettings!=settings){
+                jointSteel=null;
                 var boundary=claimed(this)!=null?claimed(this):scissors!=null&&junction.kind()==Junction.Kind.Y?scissors.boundary(junction,settings):RailSampler.yBoundary(junction,settings);
                 left=buildAt(0,boundary);
                 middle=junction.kind()==Junction.Kind.THREE?buildAt(.5,boundary):null;
@@ -80,6 +85,25 @@ public final class PointClient {
             }return mesh;
         }
         public double renderedPosition(){return lastPosition;}
+        private boolean animationVisible(){return PointConfig.animationDistance()>0&&withinDistance(junction.center(),PointConfig.animationDistance());}
+        /** Static seam input, including only blade edges identical in every throw. */
+        public Mesh jointSteel(){
+            if(jointSteel!=null&&left!=null&&lastSettings==settings)return jointSteel;
+            mesh();jointSteel=new Mesh();
+            for(int i=0;i<left.quads.size();i++){
+                var q=left.quads.get(i);
+                if(RailJoints.steel(q.part())&&!(settings.movableFrog()&&q.part().equals("frog")))jointSteel.quad(q);
+                if(!q.part().equals("blade"))continue;
+                var a=List.of(q.a(),q.b(),q.c(),q.d());var r=right.quads.get(i);var b=List.of(r.a(),r.b(),r.c(),r.d());
+                var mid=middle==null?q:middle.quads.get(i);var c=List.of(mid.a(),mid.b(),mid.c(),mid.d());
+                for(int edge=0;edge<4;edge++){
+                    int end=(edge+1)%4;
+                    if(a.get(edge).distance(b.get(edge))>1e-9||a.get(end).distance(b.get(end))>1e-9||a.get(edge).distance(c.get(edge))>1e-9||a.get(end).distance(c.get(end))>1e-9)continue;
+                    if(a.get(edge).distance(a.get(end))>1e-6)jointSteel.quad(new Mesh.Quad(q.a(),q.b(),q.c(),q.d(),q.surface(),"blade_heel",edge,q.uv()));
+                }
+            }
+            return jointSteel;
+        }
         public void preview(PointSettings s){if(settings.equals(s)&&left!=null)return;settings=s;profile=profileFor(junction,s);styles=stylesFor(junction,s);left=null;mesh=null;refreshScissors();}
     }
     public static List<View> views=List.of();
@@ -91,9 +115,12 @@ public final class PointClient {
     private static Map<String,List<PointNetwork.Movement>> movements=Map.of();
     private static PointNetwork.Motion motion;private static long motionReceived;
     private static int ticks;private static Object level;private static long signature;private static boolean refreshProfiles;
+    private static double lastRebuildX=Double.NaN,lastRebuildZ=Double.NaN;
+    private static final IdentityHashMap<View,Boolean> TAKEOVER_CACHE=new IdentityHashMap<>();
+    private static double takeoverCameraX=Double.NaN,takeoverCameraY=Double.NaN,takeoverCameraZ=Double.NaN,takeoverCachedDistance=-1;
     private static int serverFeatures;private static int serverModelFormat=-1;private static boolean handshakeComplete;
     public static String message="";
-    public static void clear(){views=List.of();SETTINGS.clear();motion=null;signature=0;serverFeatures=0;serverModelFormat=-1;handshakeComplete=false;Profiles.clear();RailSampler.clear();BY_RAIL.clear();groupJunctions=List.of();groupsById=Map.of();movements=Map.of();PointRenderer.clear();}
+    public static void clear(){views=List.of();SETTINGS.clear();motion=null;signature=0;lastRebuildX=lastRebuildZ=Double.NaN;serverFeatures=0;serverModelFormat=-1;handshakeComplete=false;Profiles.clear();RailSampler.clear();BY_RAIL.clear();groupJunctions=List.of();groupsById=Map.of();movements=Map.of();TAKEOVER_CACHE.clear();takeoverCachedDistance=-1;PointRenderer.clear();}
     public static void handshake(PointNetwork.Handshake m){
         serverFeatures=m.features();serverModelFormat=m.modelFormat();
         handshakeComplete=m.protocol()==PointNetwork.PROTOCOL_VERSION&&serverModelFormat>=0&&serverModelFormat<=PointNetwork.MODEL_FORMAT_VERSION;
@@ -117,13 +144,22 @@ public final class PointClient {
     public static void tick(){
         var mc=Minecraft.getInstance();if(mc.level!=level){level=mc.level;clear();}if(mc.level==null)return;
         if(++ticks%20==0)rebuild();
-        if(!net.minecraftforge.fml.ModList.get().isLoaded("mtr_brsignal_addon")&&!views.isEmpty())movements=index(nativeMovements());
+        // Native vehicle paths are expensive to walk and allocate a movement list each time.
+        // Updating on alternating ticks keeps turnout response effectively real-time while
+        // removing half of this allocation-heavy polling from the client tick.
+        if(ticks%2==0&&!net.minecraftforge.fml.ModList.get().isLoaded("mtr_brsignal_addon")&&!views.isEmpty())movements=index(nativeMovements());
         for(View v:views){choose(v);double step=.05/v.settings.animationSeconds();v.position+=Math.max(-step,Math.min(step,v.target-v.position));}
     }
-    public static void invalidate(){signature=0;refreshProfiles=true;Profiles.clear();}
+    public static void invalidate(){signature=0;lastRebuildX=lastRebuildZ=Double.NaN;refreshProfiles=true;Profiles.clear();}
     public static void rebuild(){
         var mc=Minecraft.getInstance();if(mc.player==null)return;
-        List<Rail> rails=MinecraftClientData.getInstance().railIdMap.values().stream().filter(r->r.getTransportMode()==TransportMode.TRAIN&&r.railMath.getLength()>1).filter(r->{var m=r.railMath;return mc.player.getX()>=m.minX-96&&mc.player.getX()<=m.maxX+96&&mc.player.getZ()>=m.minZ-96&&mc.player.getZ()<=m.maxZ+96;}).sorted(Comparator.comparing(Rail::getHexId)).toList();
+        if(Double.isFinite(lastRebuildX)&&!refreshProfiles){double dx=mc.player.getX()-lastRebuildX,dz=mc.player.getZ()-lastRebuildZ;if(dx*dx+dz*dz<16)return;}
+        lastRebuildX=mc.player.getX();lastRebuildZ=mc.player.getZ();
+        // Keep the detector window tied to the takeover distance. A fixed 96 m window made
+        // distant point views remain in the detector and geometry caches even when native MTR
+        // rendering had already taken over, which made the distance sliders ineffective for CPU.
+        double scan=Math.max(16,Math.min(96,PointConfig.takeoverDistance()+16));
+        List<Rail> rails=MinecraftClientData.getInstance().railIdMap.values().stream().filter(r->r.getTransportMode()==TransportMode.TRAIN&&r.railMath.getLength()>1).filter(r->{var m=r.railMath;return mc.player.getX()>=m.minX-scan&&mc.player.getX()<=m.maxX+scan&&mc.player.getZ()>=m.minZ-scan&&mc.player.getZ()<=m.maxZ+scan;}).sorted(Comparator.comparing(Rail::getHexId)).toList();
         // Check identities and Optional Rail settings; unchanged tracks reuse their samples.
         var tracks=new ArrayList<Track>();long sig=1;
         for(Rail r:rails){Track t=RailSampler.sample(r);if(t==null)continue;tracks.add(t);sig=31*sig+System.identityHashCode(t);sig=31*sig+r.getStyles().hashCode();}
@@ -271,8 +307,10 @@ public final class PointClient {
     private static PointMesh.YBoundary claimed(View v){
         var b=v.boundary!=null?v.boundary:v.scissors!=null&&v.junction.kind()==Junction.Kind.Y?v.scissors.boundary(v.junction,v.settings):null;
         if(b==null||v.junction.kind()!=Junction.Kind.Y)return b;
+        if(b.equals(v.claimedInput)&&v.settings.equals(v.claimedSettings)&&v.profile.equals(v.claimedProfile))return v.claimedResult;
         var frog=new FrogGeometry(v.junction,v.settings,v.profile.tune(v.settings),PointMesh.extent(v.junction,v.settings));
-        return b.withEnds(Math.max(b.aEnd(),frog.heel(0)),Math.max(b.bEnd(),frog.heel(1)),b.thirdEnd());
+        v.claimedInput=b;v.claimedSettings=v.settings;v.claimedProfile=v.profile;
+        return v.claimedResult=b.withEnds(Math.max(b.aEnd(),frog.heel(0)),Math.max(b.bEnd(),frog.heel(1)),b.thirdEnd());
     }
     private static List<Track> without(List<Track> all,List<Track> scope){
         var out=new ArrayList<Track>();
@@ -297,6 +335,23 @@ public final class PointClient {
     private static Set<String> stylesFor(Junction j,PointSettings s){var styles=new HashSet<String>();if(!s.profileStyle().isBlank()&&Profiles.get(s.profileStyle()).track())styles.add(Profiles.canonical(s.profileStyle()));for(String id:styleIds(j))if(Profiles.get(id).track())styles.add(Profiles.canonical(id));return styles;}
     public static V3 editCenter(View v){return v.junction.kind()!=Junction.Kind.DIAMOND?v.junction.a().at(Math.min(5,PointMesh.extent(v.junction,v.settings)/2)).lerp(v.junction.b().at(Math.min(5,PointMesh.extent(v.junction,v.settings)/2)),.5):v.junction.center();}
     public static View nearest(V3 p){return views.stream().filter(v->v.junction.center().distance(p)<64).min(Comparator.comparingDouble(v->editCenter(v).distance(p))).orElse(null);}
+    public static boolean takeoverVisible(View v){
+        if(v==null)return false;double distance=PointConfig.takeoverDistance();if(distance<=0)return false;
+        var mc=Minecraft.getInstance();if(mc==null||mc.level==null||mc.gameRenderer==null)return true;
+        var camera=mc.gameRenderer.getMainCamera().getPosition();
+        // Re-evaluate the distance buckets only after crossing a 2 m camera cell. This avoids
+        // rebuilding every rail-cell decision for every interpolated movement frame.
+        double cx=Math.floor(camera.x/2),cy=Math.floor(camera.y/2),cz=Math.floor(camera.z/2);
+        if(cx!=takeoverCameraX||cy!=takeoverCameraY||cz!=takeoverCameraZ||distance!=takeoverCachedDistance){
+            takeoverCameraX=cx;takeoverCameraY=cy;takeoverCameraZ=cz;takeoverCachedDistance=distance;TAKEOVER_CACHE.clear();
+        }
+        return TAKEOVER_CACHE.computeIfAbsent(v,k->{double dx=camera.x-v.junction.center().x(),dy=camera.y-v.junction.center().y(),dz=camera.z-v.junction.center().z();return dx*dx+dy*dy+dz*dz<=distance*distance;});
+    }
+    private static boolean withinDistance(V3 point,double distance){
+        var mc=Minecraft.getInstance();if(mc==null||mc.level==null||mc.gameRenderer==null)return true;
+        var camera=mc.gameRenderer.getMainCamera().getPosition();double dx=camera.x-point.x(),dy=camera.y-point.y(),dz=camera.z-point.z();
+        return dx*dx+dy*dy+dz*dz<=distance*distance;
+    }
     /** Whether the mod draws this native cell instead of MTR: the same decision the renderer mixin
      *  takes per rail cell, so the hidden region and the modded mesh can never disagree. */
     public static boolean suppress(Rail rail,String style,V3 p,double margin){
@@ -307,6 +362,7 @@ public final class PointClient {
     static boolean suppress(List<View> candidates,String railId,String style,V3 p,double margin){
         if(railId==null)return false;style=Profiles.canonical(style);
         for(View v:candidates)if(v.settings.enabled()&&!v.styles.isEmpty()&&matchesNativeStyle(v.styles,style)){
+            if(!takeoverVisible(v))continue;
             Junction j=v.junction;
             if(v.scissors!=null){if(v.scissors.owns(j,railId,p))return true;continue;}
             if(j.kind()==Junction.Kind.DIAMOND){

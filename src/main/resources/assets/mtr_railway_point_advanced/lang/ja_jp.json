@@ -127,6 +127,8 @@
   "mtrpoint.config.ui_scale": "画面倍率：%s%%",
   "mtrpoint.config.lod_near": "高精細 → 中精細（m）",
   "mtrpoint.config.lod_far": "中精細 → 低精細（m）",
+  "mtrpoint.config.animation_distance": "ポイントアニメーション距離",
+  "mtrpoint.config.takeover_distance": "ポイント描画接管距離",
   "mtrpoint.config.lod_help": "範囲は 0–4096 m。2つ目は1つ目以上に設定してください。保存後、通常線路と分岐器に即時適用されます。",
   "mtrpoint.config.lod_equal": "境界が同じ場合は中精細を省略します。",
   "mtrpoint.config.lod_zero": "両方 0 の場合は常に低精細を使用します。",

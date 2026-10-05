@@ -23,6 +23,8 @@ public record ProfileModel(ModelDetail detail,List<Mesh.Quad> attachments,List<M
             var endpoint=endpointObj.select(endpointNames);double endpointMin=points(endpoint).mapToDouble(V3::z).min().orElseThrow(),endpointMax=points(endpoint).mapToDouble(V3::z).max().orElseThrow();
             if(Math.abs(endpointMin)>.001||Math.abs(endpointMax-length)>.001)throw new IllegalArgumentException("continuousGuard endpoint OBJ z range must be 0..endpointLength");
             var guardRails=obj.select(guardNames);double guardCenter=points(guardRails).mapToDouble(v->Math.abs(v.x())).average().orElseThrow();
+            // Explicit descriptor roles identify native check steel independently of OBJ names.
+            guardRails=guardRails.stream().map(q->new Mesh.Quad(q.a(),q.b(),q.c(),q.d(),q.surface(),"rail_native_guard",q.index(),q.uv())).toList();
             double inset=c.has("supportInset")?c.get("supportInset").getAsDouble():0,nose=c.has("noseLength")?c.get("noseLength").getAsDouble():0;
             String mode=c.has("supportMode")?c.get("supportMode").getAsString():"independent";
             if(inset<0||nose<0||nose>length||!Set.of("shared","independent").contains(mode))throw new IllegalArgumentException("Invalid continuousGuard support configuration");

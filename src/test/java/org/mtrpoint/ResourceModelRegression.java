@@ -14,6 +14,7 @@ final class ResourceModelRegression {
         if(pack==null){System.out.println("RESOURCE_MODELS: SKIPPED external Citizons Railway pack not found; set CITIZONS_RAILWAY_PACK to its directory");return;}
         JsonObject descriptor=JsonParser.parseString(Files.readString(pack.resolve("citizons_railway/rail_profiles/citizons_mainline_1435.json"))).getAsJsonObject();
         ObjTemplate.Reader reader=id->{String[] parts=id.split(":",2);return Files.readString(pack.resolve(parts[0]).resolve(parts[1]));};
+        org.mtrpoint.client.BedGuardJointRegression.run(pack,reader);
         continuousSupports(pack,reader);
         slabSeats(pack,reader);
         String model=descriptor.get("model").getAsString();var loaded=ProfileModel.read(descriptor,model,"",true,reader);var detail=loaded.detail();
@@ -27,7 +28,8 @@ final class ResourceModelRegression {
             String lod=descriptor.getAsJsonObject("lod").getAsJsonObject(name).get("model").getAsString();JsonObject variant=descriptor.deepCopy();variant.addProperty("model",lod);
             var lower=ProfileModel.read(variant,lod,"",true,reader);
             require(lower.detail().rails().equals(detail.rails()),"LOD switch changes the steel section");
-            require(lower.detail().fittings().size()<detail.fittings().size()*.2,"Distant fittings are still too dense");
+            int previous=fittingLods.isEmpty()?detail.fittings().size():fittingLods.get(fittingLods.size()-1).size();
+            require(!lower.detail().fittings().isEmpty()&&lower.detail().fittings().size()<previous*.5,"Each fitting LOD must retain hardware while reducing faces by at least half");
             fittingLods.add(lower.detail().fittings());
         }
         SupportGeometryRegression.run(detail,fittingLods.get(0),fittingLods.get(1));
@@ -111,6 +113,8 @@ final class ResourceModelRegression {
         Profile slab=profiles.get(1);ModelDetail detail=slab.detail();
         Junction parityJunction=Detector.find(Regression.y().subList(0,2)).get(0);
         for(Profile p:profiles)SwitchBladeRegression.closedTips(p.source(),parityJunction,PointSettings.DEFAULT,p);
+        for(Profile p:profiles)org.mtrpoint.client.FrogWorldRegression.run(p);
+        for(Profile p:profiles)org.mtrpoint.client.NodeJointRegression.run(p);
         for(Profile p:profiles)SwitchBladeRegression.lSection(p,PointSettings.DEFAULT);
         for(int mode=0;mode<=4;mode++){
             Set<Mesh.Quad> reference=null;

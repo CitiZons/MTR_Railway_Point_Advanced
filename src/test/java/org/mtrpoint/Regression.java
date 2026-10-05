@@ -9,6 +9,12 @@ public final class Regression {
     public static List<Track> y(){var a=new ArrayList<V3>();var b=new ArrayList<V3>();for(int i=0;i<=120;i++){double z=i*.25,x=.008*z*z;a.add(new V3(-x,0,z));b.add(new V3(x,0,z));}return List.of(new Track("a","0,0,0","-7,0,30",a),new Track("b","0,0,0","7,0,30",b),line("in","0,0,-20","0,0,0",new V3(0,0,-20),new V3(0,0,0)));}
     private static void require(boolean pass,String why){if(!pass)throw new AssertionError(why);}
     public static void main(String[] args)throws Exception{
+        org.mtrpoint.client.RenderCacheRegression.run();
+        ThreeWaySafetyRegression.run();
+        ThreeWayShapeRegression.run();
+        org.mtrpoint.client.FrogWorldRegression.run();
+        org.mtrpoint.client.NodeJointRegression.run(Profile.STANDARD);
+        org.mtrpoint.client.ThreeWayWorldRegression.run();
         org.mtrpoint.client.RailDetailRegression.run();
         ResourceModelRegression.run();
         org.mtrpoint.client.ContinuousGuardRegression.run();
@@ -71,11 +77,11 @@ public final class Regression {
         require(Detector.deduplicate(List.of(duplicate,same)).size()==1,"Identical turnout geometry was deduplicated");
         var three=new ArrayList<>(List.of(rails.get(0),rails.get(1),line("middle","0,0,0","0,0,30",new V3(0,0,0),new V3(0,0,30))));
         var triple=Detector.find(three);require(triple.size()==1&&triple.get(0).kind()==Junction.Kind.THREE,"Three-way fan has one independent editor");
-        require(GuardRails.assembled(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,null,null).size()==12,"All three-way checks enter the shared assembly");
+        require(GuardRails.assembled(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,null,null).size()==10,"Three-way centre guards omitted, wings retained");
         var threeChecks=GuardRails.selectable(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,null,null);
         require(threeChecks.size()==12,"All three-way check rails have editor identities");
         var check=threeChecks.get(0);var threeEdit=PointSettings.DEFAULT.guard(0,new PointSettings.GuardEdit(check.start(),check.end(),check.flareStart(),check.flareEnd(),""));
-        require(GuardRails.assembled(triple.get(0),threeEdit,Profile.STANDARD,null,null).size()==12,"Three-way manual edit preserves the shared intervals");
+        require(GuardRails.assembled(triple.get(0),threeEdit,Profile.STANDARD,null,null).size()==10,"Three-way manual edit must not restore centre guards");
         Mesh t0=PointMesh.build(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,0),tm=PointMesh.build(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,.5),t1=PointMesh.build(triple.get(0),PointSettings.DEFAULT,Profile.STANDARD,1);
         require(t0.quads.size()==tm.quads.size()&&tm.quads.size()==t1.quads.size(),"Three-way animation topology");
         require(!t0.quads.equals(tm.quads)&&!tm.quads.equals(t1.quads),"Three distinct blade positions");

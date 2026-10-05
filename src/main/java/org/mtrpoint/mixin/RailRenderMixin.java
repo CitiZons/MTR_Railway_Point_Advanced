@@ -14,6 +14,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(value=RenderRails.class,remap=false)
 public abstract class RailRenderMixin {
     private static final ThreadLocal<Rail> point$current=new ThreadLocal<>();
+    @Inject(method="render",at=@At("HEAD")) private static void point$frame(CallbackInfo ci){PointRenderer.beginFrame();}
     @Inject(method="renderRailStandard(Lorg/mtr/mapping/holder/ClientWorld;Lorg/mtr/core/data/Rail;FLorg/mtr/mod/render/RenderRails$RenderState;FLorg/mtr/mapping/holder/Identifier;FFFF)V",at=@At("HEAD"))
     private static void point$begin(ClientWorld world,Rail rail,float y,@Coerce Object state,float width,Identifier texture,float u1,float v1,float u2,float v2,CallbackInfo ci){point$current.set(rail);SleeperSeams.begin();}
     @Inject(method="renderRailStandard(Lorg/mtr/mapping/holder/ClientWorld;Lorg/mtr/core/data/Rail;FLorg/mtr/mod/render/RenderRails$RenderState;FLorg/mtr/mapping/holder/Identifier;FFFF)V",at=@At("RETURN"))

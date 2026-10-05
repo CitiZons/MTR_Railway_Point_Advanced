@@ -5,20 +5,32 @@ import java.util.*;
 
 /** Persistent world geometry, merged check rails and preserved third-party attachments. */
 public final class PointRenderer {
-    private record GuardSource(PointClient.View view,PointSettings settings,Profile profile,ScissorsLayout group) {}
+    private record GuardSource(PointClient.View view,PointSettings settings,Profile profile,ScissorsLayout group,
+        PointMesh.YBoundary boundary,PointMesh.DiamondBoundary diamond,List<Track> centreRoads,List<Track> channels,ScissorsLayout shared,boolean centreHidden) {}
+    private static GuardSource source(PointClient.View v){return new GuardSource(v,v.settings,v.profile,v.scissors,v.boundary,v.diamond,v.centreRoads,v.channels,v.shared,v.centreHidden);}
     private static List<GuardSource> guardSources=List.of();
     private static final Compiled GUARDS=new Compiled();
     private static long guardBuilds;
     private static final Map<PointClient.View,PointGpu> GPU=new IdentityHashMap<>();
     private static List<PointClient.View> knownViews=List.of();
+    private static List<PointClient.View> activeViews=List.of();
     private static final Map<List<GuardSource>,Mesh> ASSEMBLIES=new LinkedHashMap<>();
     private static final Map<Mesh,PointGpu> ASSEMBLY_GPU=new IdentityHashMap<>();
     private static final Map<Mesh,List<Mesh.Quad>> ASSEMBLY_BEDS=new IdentityHashMap<>();
+    private record SavedAssembly(Mesh mesh,List<Mesh.Quad> beds) {}
+    // CPU-only return cache: GPU buffers are still closed when an assembly leaves the frame.
+    private static final Map<List<GuardSource>,SavedAssembly> RECENT_ASSEMBLIES=new LinkedHashMap<>();
+    private static final int MAX_RECENT_ASSEMBLIES=1,MAX_RECENT_FACES=16000;
+    private static int recentFaces;
+    private static List<Mesh> jointSources=List.of();
+    private static Mesh jointSteel=new Mesh();
     private static boolean originalWings(GuardSource s,List<GuardSource> component){
         // Crossing components still need the common interval pool to resolve terminal ownership.
         if(component.stream().anyMatch(other->other.view.junction.kind()==Junction.Kind.DIAMOND))return false;
-        return s.view.junction.kind()==Junction.Kind.Y?!s.settings.guardEdits().containsKey(2)&&!s.settings.guardEdits().containsKey(3)
-            :s.view.junction.kind()==Junction.Kind.THREE&&s.settings.guardEdits().isEmpty();
+        // ThreeWayMesh already bakes its connected wings together. Re-sampling
+        // them here loses the common knee section and produces hairline openings.
+        if(s.view.junction.kind()==Junction.Kind.THREE)return s.settings.guardEdits().isEmpty();
+        return s.view.junction.kind()==Junction.Kind.Y&&!s.settings.guardEdits().containsKey(2)&&!s.settings.guardEdits().containsKey(3);
     }
     private record Bounds(double x0,double x1,double z0,double z1){
         boolean overlaps(Bounds b){return x0<=b.x1&&b.x0<=x1&&z0<=b.z1&&b.z0<=z1;}
@@ -36,9 +48,17 @@ public final class PointRenderer {
         Mesh mesh;
         void update(Mesh next,double frame){mesh=next;}
     }
-    public static void clear(){GPU.values().forEach(PointGpu::close);GPU.clear();knownViews=List.of();ASSEMBLY_GPU.values().forEach(PointGpu::close);ASSEMBLY_GPU.clear();ASSEMBLIES.clear();RailCellCache.clear();guardSources=List.of();GUARDS.mesh=null;}
+    public static void clear(){GPU.values().forEach(PointGpu::close);GPU.clear();knownViews=List.of();activeViews=List.of();ASSEMBLY_GPU.values().forEach(PointGpu::close);ASSEMBLY_GPU.clear();ASSEMBLIES.clear();ASSEMBLY_BEDS.clear();RECENT_ASSEMBLIES.clear();recentFaces=0;jointSources=List.of();jointSteel=new Mesh();RailCellCache.clear();guardSources=List.of();GUARDS.mesh=null;}
+    private static void remember(List<GuardSource> key,Mesh mesh){
+        var beds=ASSEMBLY_BEDS.getOrDefault(mesh,List.of());int faces=mesh.quads.size()+beds.size();
+        if(faces>MAX_RECENT_FACES)return;
+        while(!RECENT_ASSEMBLIES.isEmpty()&&(RECENT_ASSEMBLIES.size()>=MAX_RECENT_ASSEMBLIES||recentFaces+faces>MAX_RECENT_FACES)){
+            var it=RECENT_ASSEMBLIES.entrySet().iterator();var old=it.next().getValue();recentFaces-=old.mesh.quads.size()+old.beds.size();it.remove();
+        }
+        RECENT_ASSEMBLIES.put(key,new SavedAssembly(mesh,beds));recentFaces+=faces;
+    }
     private static void guards(List<PointClient.View> active){
-        var next=active.stream().map(v->new GuardSource(v,v.settings,v.profile,v.scissors)).toList();
+        var next=active.stream().map(PointRenderer::source).toList();
         if(next.equals(guardSources)&&GUARDS.mesh!=null)return;
         guardSources=next;var boxes=next.stream().map(PointRenderer::bounds).toList();var components=new ArrayList<List<GuardSource>>();boolean[] used=new boolean[next.size()];
         for(int i=0;i<next.size();i++)if(!used[i]){
@@ -47,7 +67,12 @@ public final class PointRenderer {
             indices.sort(Integer::compareTo);components.add(indices.stream().map(next::get).toList());
         }
         var retained=new LinkedHashMap<List<GuardSource>,Mesh>();Mesh combined=new Mesh();
-        for(var component:components){Mesh mesh=ASSEMBLIES.get(component);if(mesh==null){mesh=assemble(component);guardBuilds++;}retained.put(component,mesh);combined.quads.addAll(mesh.quads);}
+        for(var component:components){
+            Mesh mesh=ASSEMBLIES.get(component);
+            if(mesh==null){var saved=RECENT_ASSEMBLIES.remove(component);if(saved!=null){mesh=saved.mesh;recentFaces-=mesh.quads.size()+saved.beds.size();if(!saved.beds.isEmpty())ASSEMBLY_BEDS.put(mesh,saved.beds);}}
+            if(mesh==null){mesh=assemble(component);guardBuilds++;}retained.put(component,mesh);combined.quads.addAll(mesh.quads);
+        }
+        for(var old:ASSEMBLIES.entrySet())if(!retained.containsKey(old.getKey()))remember(old.getKey(),old.getValue());
         ASSEMBLIES.clear();ASSEMBLIES.putAll(retained);var meshes=new HashSet<>(retained.values());
         ASSEMBLY_BEDS.keySet().retainAll(meshes);
         for(var it=ASSEMBLY_GPU.entrySet().iterator();it.hasNext();){var entry=it.next();if(!meshes.contains(entry.getKey())){entry.getValue().close();it.remove();}}
@@ -82,13 +107,17 @@ public final class PointRenderer {
             for(var q:source.view.mesh().quads){
                 if(q.part().startsWith("fastener_"))fasteners.add(new Mesh.Quad(q.a(),q.b(),q.c(),q.d(),q.surface(),q.part(),-1,q.uv()));
                 else if(q.part().equals("sleeper")||q.part().equals("fastener")||q.part().equals("track_bed"))supports.quad(q);
-                else if(q.part().equals("wing")&&source.view.junction.kind()!=Junction.Kind.DIAMOND&&(q.index()!=-2||originalWings(source,next)))check.quad(q);
+                else if(q.part().equals("wing")&&(source.view.junction.kind()==Junction.Kind.Y&&(q.index()!=-2||originalWings(source,next))||source.view.junction.kind()==Junction.Kind.THREE&&originalWings(source,next)))check.quad(q);
             }
             // These are incoming closure wings, joined to their route rails. Cutting them by
             // running-head overlap amputates their knees. Every road's flange channels still cut.
             supports.quads.addAll(DiamondGeometry.cutSteel(check,cutters,tuned,source.settings,tuned.top()+source.settings.verticalOffset(),source.view.drawnRoads(),false).quads);
         }
         supports.quads.addAll(merged.quads);merged=SurfaceUnion.build(supports);merged.quads.addAll(fasteners);
+        Mesh finalSteel=new Mesh();finalSteel.quads.addAll(merged.quads);
+        for(var source:next)for(var q:source.view.jointSteel().quads)
+            if(!PointGpu.hiddenInView(q)&&!(source.settings.movableFrog()&&q.part().equals("frog")))finalSteel.quad(q);
+        merged.quads.addAll(RailJoints.bridges(finalSteel).quads);
         var beds=merged.quads.stream().filter(q->q.part().equals("track_bed")).toList();
         merged.quads.removeIf(q->q.part().equals("track_bed"));
         if(!beds.isEmpty())ASSEMBLY_BEDS.put(merged,beds);
@@ -96,12 +125,12 @@ public final class PointRenderer {
     }
     /** Test access to the exact final assembly the frame renderer submits. */
     static Mesh assembleForTest(List<PointClient.View> active){
-        return assemble(active.stream().map(v->new GuardSource(v,v.settings,v.profile,v.scissors)).toList());
+        return assemble(active.stream().map(PointRenderer::source).toList());
     }
     /** Test access to everything the world draws for these views: the shared component assembly plus
      *  each view's own steel, filtered exactly like the per-view draw filters it. */
     static Mesh worldForTest(List<PointClient.View> active){
-        Mesh world=assemble(active.stream().map(v->new GuardSource(v,v.settings,v.profile,v.scissors)).toList());
+        Mesh world=assemble(active.stream().map(PointRenderer::source).toList());
         for(var view:active)for(var q:view.mesh().quads)if(!PointGpu.hiddenInView(q))world.quad(q);
         return world;
     }
@@ -135,13 +164,21 @@ public final class PointRenderer {
         double zMin=model==null?-resource.getRepeatInterval()/2:model.detail().zMin(),zMax=model==null?resource.getRepeatInterval()/2:model.detail().zMax();
         RailCellCache.submit(faces,RailSampler.sweep(rail,resource,a,b),flip,resource.getModelYOffset(),zMin,zMax,shift,swept);
     }
+    public static void beginFrame(){RailCellCache.begin();}
     public static void render(){
         var mc=net.minecraft.client.Minecraft.getInstance();if(mc.level==null||mc.player==null){clear();return;}
         if(mc.screen instanceof BlueprintScreen||mc.screen instanceof PointSelectionScreen){RailCellCache.discard();return;}
-        var active=PointClient.views.stream().filter(v->!v.styles.isEmpty()&&v.settings.enabled()).toList();
+        var active=PointClient.views.stream().filter(v->!v.styles.isEmpty()&&v.settings.enabled()&&PointClient.takeoverVisible(v)).toList();
+        activeViews=active;
         guards(active);
         for(Mesh mesh:ASSEMBLIES.values())RailCellCache.submitWorldBeds(ASSEMBLY_BEDS.getOrDefault(mesh,List.of()));
-        RailCellCache.finish();
+        var sources=new ArrayList<Mesh>(ASSEMBLIES.values());for(var view:active)sources.add(view.jointSteel());
+        if(!sources.equals(jointSources)){
+            jointSources=List.copyOf(sources);jointSteel=new Mesh();
+            for(int i=0;i<sources.size();i++)for(var q:sources.get(i).quads)
+                if(RailJoints.steel(q.part())&&(i<ASSEMBLIES.size()||!PointGpu.hiddenInView(q)))jointSteel.quad(q);
+        }
+        RailCellCache.finish(jointSteel);
     }
     public static void drawGpu(net.minecraftforge.client.event.RenderLevelStageEvent e){
         if(e.getStage()!=net.minecraftforge.client.event.RenderLevelStageEvent.Stage.AFTER_ENTITIES)return;
@@ -151,9 +188,8 @@ public final class PointRenderer {
             knownViews=PointClient.views;var retained=new HashSet<>(knownViews);
             for(var it=GPU.entrySet().iterator();it.hasNext();){var item=it.next();if(!retained.contains(item.getKey())){item.getValue().close();it.remove();}}
         }
-        var active=PointClient.views.stream().filter(v->!v.styles.isEmpty()&&v.settings.enabled()).toList();
-        guards(active);
+        var active=activeViews.stream().filter(PointClient::takeoverVisible).toList();
         for(Mesh mesh:ASSEMBLIES.values()){var gpu=ASSEMBLY_GPU.computeIfAbsent(mesh,k->new PointGpu());if(!gpu.visible(e))continue;gpu.update(mesh,0,false,false);gpu.draw(e);}
-        for(var view:active){var gpu=GPU.computeIfAbsent(view,k->new PointGpu());if(gpu.hasSource(view.mesh)&&!gpu.visible(e))continue;Mesh mesh=view.mesh();gpu.update(mesh,view.renderedPosition(),view.settings.movableFrog(),true);gpu.draw(e);}
+        for(var view:active){var gpu=GPU.computeIfAbsent(view,k->new PointGpu());if(!gpu.visible(e))continue;Mesh mesh=view.mesh();gpu.update(mesh,view.renderedPosition(),view.settings.movableFrog(),true);gpu.draw(e);}
     }
 }

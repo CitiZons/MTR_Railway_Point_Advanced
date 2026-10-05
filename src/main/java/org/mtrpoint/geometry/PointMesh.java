@@ -131,6 +131,7 @@ public final class PointMesh {
         sleepers(mesh,j,s,p,extent,boundary);
         EndSleepers.finish(mesh,j,s,p,boundary);
         SleeperEdits.finish(mesh,j,s,p);
+        if(crossing!=null)FrogFittings.clear(mesh,crossing,p);
         return mesh;
     }
     private static V3 running(Running r,double s,double offset){return r.track.at(s).add(r.track.tangent(s).lateral().mul(r.sign*offset));}

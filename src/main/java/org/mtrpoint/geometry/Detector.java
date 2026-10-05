@@ -9,7 +9,7 @@ public final class Detector {
         for(Track t:tracks){nodes.computeIfAbsent(t.startNode,k->new ArrayList<>()).add(t);nodes.computeIfAbsent(t.endNode,k->new ArrayList<>()).add(t.reverse());}
         for(var entry:nodes.entrySet()) {
             var ts=entry.getValue(); ts.sort(Comparator.comparing(t->t.id));
-            if(ts.size()<2)continue;
+            if(ts.size()<2||ts.size()>16)continue;
             for(int i=0;i<ts.size();i++)for(int k=i+1;k<ts.size();k++)for(int l=k+1;l<ts.size();l++){
                 Track a=ts.get(i),b=ts.get(k),c=ts.get(l);
                 if(a.tangent(0).dot(b.tangent(0))<.5||a.tangent(0).dot(c.tangent(0))<.5||b.tangent(0).dot(c.tangent(0))<.5)continue;
@@ -36,12 +36,15 @@ public final class Detector {
         }
         // Spatial bins keep crossing discovery local instead of comparing every rail pair.
         var bins=new HashMap<String,List<Segment>>(); var seen=new HashSet<String>();
+        long comparisons=0,cells=0;
         for(Track t:tracks) for(int i=1;i<t.points.size();i++) {
             V3 a=t.points.get(i-1),b=t.points.get(i);
             for(int x=(int)Math.floor(Math.min(a.x(),b.x())/8);x<=(int)Math.floor(Math.max(a.x(),b.x())/8);x++)
                 for(int z=(int)Math.floor(Math.min(a.z(),b.z())/8);z<=(int)Math.floor(Math.max(a.z(),b.z())/8);z++) {
+                    if(++cells>200000)return List.of(); // Leave all native rails visible on overload.
                     String cell=x+":"+z; var entries=bins.computeIfAbsent(cell,k->new ArrayList<>());
                     for(Segment other:entries) {
+                        if(++comparisons>2000000)return List.of();
                         if(t.id.equals(other.t.id))continue;
                         String pair=t.id.compareTo(other.t.id)<0?t.id+"/"+i+"|"+other.t.id+"/"+other.i:other.t.id+"/"+other.i+"|"+t.id+"/"+i;
                         if(!seen.add(pair))continue;
@@ -66,7 +69,7 @@ public final class Detector {
                     entries.add(new Segment(t,i));
                 }
         }
-        return deduplicate(result);
+        return deduplicate(result.stream().filter(GeometryEligibility::supported).toList());
     }
     public static List<Junction> deduplicate(List<Junction> result){
         var unique=new ArrayList<Junction>();
