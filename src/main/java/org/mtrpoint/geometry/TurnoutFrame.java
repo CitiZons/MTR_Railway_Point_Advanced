@@ -31,6 +31,24 @@ public final class TurnoutFrame {
         double factor=Math.pow(Math.max(0,Math.min(1,1-(station-start)/length)),2);
         return road.at(station).add(road.tangent(station).lateral().mul(sign*(offset-s.throwDistance()*open*factor)));
     }
+    /** Locate the planed head against the other road's stock rail at the closed tip,
+     *  then return smoothly to the route as the head reaches its full section. */
+    public static V3 seatedBlade(Track road,Track stock,double station,double sign,double open,double start,double length,double contact,Profile p,PointSettings s){
+        double taper=taper(station-start,contact),offset=p.centerOffset();
+        V3 normal=road.tangent(station).lateral();
+        V3 closed=blade(road,station,sign,offset-p.headWidth()/2+taper*p.headWidth()/2,0,start,length,s);
+        double t=Math.max(0,Math.min(1,(station-start)/contact));
+        if(t<1){
+            double at=nearestOffset(stock,closed,sign*offset);
+            V3 stockNormal=stock.tangent(at).lateral();
+            V3 edge=stock.at(at).add(stockNormal.mul(sign*(offset-p.headWidth()/2)));
+            V3 touching=edge.sub(normal.mul(sign*taper*p.headWidth()/2));
+            double blend=1-t*t*(3-2*t);
+            closed=closed.add(normal.mul(touching.sub(closed).dot(normal)*blend));
+        }
+        double factor=Math.pow(Math.max(0,Math.min(1,1-(station-start)/length)),2);
+        return closed.sub(normal.mul(sign*s.throwDistance()*open*factor));
+    }
     /** The tip of a switch rail is planed so its head fits against the stock rail; only that
      *  contact length is thinner. Past it the section is full width again, so the blade never
      *  reads as one long sliver and the head stays continuous with the body. */

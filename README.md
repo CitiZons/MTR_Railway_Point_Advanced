@@ -1,6 +1,6 @@
 # MTR Railway Point Advanced
 
-![Minecraft 1.20.1](https://img.shields.io/badge/Minecraft-1.20.1-62a35a?style=flat-square) ![Forge 47.4.18](https://img.shields.io/badge/Forge-47.4.18-f59e0b?style=flat-square) ![MTR 4.0.3](https://img.shields.io/badge/MTR-4.0.3-3b82f6?style=flat-square) ![Version 0.1.5](https://img.shields.io/badge/version-0.1.5-2563eb?style=flat-square) ![License MIT](https://img.shields.io/badge/license-MIT-8b5cf6?style=flat-square)
+![Minecraft 1.20.1](https://img.shields.io/badge/Minecraft-1.20.1-62a35a?style=flat-square) ![Forge 47.4.18](https://img.shields.io/badge/Forge-47.4.18-f59e0b?style=flat-square) ![MTR 4.0.3](https://img.shields.io/badge/MTR-4.0.3-3b82f6?style=flat-square) ![Version 0.1.6](https://img.shields.io/badge/version-0.1.6-2563eb?style=flat-square) ![License MIT](https://img.shields.io/badge/license-MIT-8b5cf6?style=flat-square)
 
 **让 MTR 的道岔成为真实的轨道结构，而不只是普通轨道的贴图替换。**
 
@@ -15,6 +15,7 @@ MTR Railway Point Advanced generates turnout, frog, crossing and crossover geome
 | English | 中文 |
 |---|---|
 | **Procedural turnouts** — same-node Y turnouts, three-way turnouts, curved turnouts and coordinated crossover groups. | **程序化道岔**——同节点 Y 形道岔、三开道岔、曲线道岔以及协调生成的交叉渡线组合。 |
+| **Planed switch tips** — closed tips meet the stock head; an asymmetric L-shaped lower section gradually returns to the full I-section. | **削薄尖轨**——闭合尖端贴合基本轨轨头，下部采用不对称 L 形截面，再逐渐恢复完整工字形。 |
 | **Fixed crossings** — non-interlocking diamonds and flat crossings with continuous rails and flangeways. | **固定交叉**——不互通菱形交叉和平交口，保持连续钢轨并生成轮缘槽。 |
 | **Real support details** — turnout sleepers, common frog plates, slide plates, guard-rail seats, wing-rail seats, braces and bolts. | **真实支承细节**——岔枕、岔心共用底板、滑床板、护轨和翼轨承座、加强件及螺栓。 |
 | **Animated appearance** — switch rails and movable frogs follow the visual movement observed from MTR and BRsignal snapshots. | **动画外观**——尖轨和可动岔心根据 MTR 与 BRsignal 的只读状态进行视觉运动。 |
@@ -28,7 +29,7 @@ MTR Railway Point Advanced generates turnout, frog, crossing and crossover geome
 Requires Minecraft 1.20.1, Forge 47.4.18 and MTR Forge 4.0.3. Put the same JAR version in the client and server `mods/` folders:
 
 ```text
-mtr_railway_point_advanced-0.1.5.jar
+mtr_railway_point_advanced-0.1.6.jar
 ```
 
 网络协议为 `3`，客户端与服务器必须使用相同的 Mod 版本。`point-runtime-probe` 是开发测试工具，不要安装到正式客户端或服务器。
@@ -76,6 +77,10 @@ Rail profiles are stored at `assets/<namespace>/rail_profiles/<name>.json`. Mini
 Citizons Railway `0.1.1` 或更新版本可以通过 `modelGroups`、真实钢轨截面、方向别名、连续护轨端头和 LOD 模型为普通轨道及道岔提供完整材质。样式命名空间和方向后缀会规范化处理，不需要逐个资源包加入白名单，也不改变握手协议。
 
 Citizons Railway `0.1.1` or newer can provide complete ordinary-rail and turnout materials through `modelGroups`, real rail cross-sections, direction aliases, continuous guard ends and LOD models. Namespaces and directional suffixes are normalized, so a pack does not need a per-pack whitelist and the handshake protocol remains unchanged.
+
+Citizons Railway 的有砟、有枕无砟和无枕无砟道岔共用扣件布局逻辑。只有普通扣件实际重叠时才生成共用滑床；护轨共座替换所在位置的普通扣件。无枕连续混凝土支撑不作为缺少扣件的依据，有枕承接块按最终扣件座定位。
+
+Citizons Railway ballast, slab and direct-support turnouts share the fitting layout. A common slide plate replaces ordinary fittings where their footprints overlap; paired guard seats replace ordinary fittings at those seats. Continuous concrete supports do not trigger duplicate fittings, and slab blocks follow the final fitting seats.
 
 ## Detail distances / 精度距离
 
@@ -129,9 +134,9 @@ JDK 17 is required. The compile-time MTR dependency is `../MTR_BRsignal_addon/li
 .\tools\runtime_probe.ps1 -RailPack -MtrOnly
 ```
 
-`build` 包含离线几何回归并生成 `build/libs/mtr_railway_point_advanced-0.1.5.jar`；运行探针会在 `build/runtime-*` 创建隔离环境，不复制用户存档。资源包专项检查优先使用环境变量 `CITIZONS_RAILWAY_PACK`，否则读取同级 `MTR_Citizons_Railway` 子项目。
+`build` 包含离线几何回归并生成 `build/libs/mtr_railway_point_advanced-0.1.6.jar`；运行探针会在 `build/runtime-*` 创建隔离环境，不复制用户存档。资源包专项检查优先使用环境变量 `CITIZONS_RAILWAY_PACK`，否则读取同级 `MTR_Citizons_Railway` 子项目。
 
-`build` includes offline geometry regression and produces `build/libs/mtr_railway_point_advanced-0.1.5.jar`. Runtime probes create isolated environments under `build/runtime-*` and do not copy user saves. Resource-pack checks prefer `CITIZONS_RAILWAY_PACK`, then the sibling `MTR_Citizons_Railway` project.
+`build` includes offline geometry regression and produces `build/libs/mtr_railway_point_advanced-0.1.6.jar`. Runtime probes create isolated environments under `build/runtime-*` and do not copy user saves. Resource-pack checks prefer `CITIZONS_RAILWAY_PACK`, then the sibling `MTR_Citizons_Railway` project.
 
 版本变化见 [CHANGELOG.md](CHANGELOG.md)，验证证据见 [VALIDATION.md](VALIDATION.md)。
 

@@ -110,6 +110,8 @@ final class ResourceModelRegression {
         }
         Profile slab=profiles.get(1);ModelDetail detail=slab.detail();
         Junction parityJunction=Detector.find(Regression.y().subList(0,2)).get(0);
+        for(Profile p:profiles)SwitchBladeRegression.closedTips(p.source(),parityJunction,PointSettings.DEFAULT,p);
+        for(Profile p:profiles)SwitchBladeRegression.lSection(p,PointSettings.DEFAULT);
         for(int mode=0;mode<=4;mode++){
             Set<Mesh.Quad> reference=null;
             for(Profile p:profiles){

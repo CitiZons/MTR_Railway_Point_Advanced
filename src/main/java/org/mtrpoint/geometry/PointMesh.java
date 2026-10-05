@@ -99,15 +99,16 @@ public final class PointMesh {
                     // Drawing one was the "extra thin length of rail hugging the real one" defect.
                     double open=r.branch==0?position:1-position;
                     ta=TurnoutFrame.taper(d-localStart,contact);tb=TurnoutFrame.taper(e-localStart,contact);
-                    V3 ba=switchRail(r,d,ta,offset,open,localStart,blade,p,s),bb=switchRail(r,e,tb,offset,open,localStart,blade,p,s);
+                    Track stock=r.branch==0?j.b():j.a();
+                    V3 ba=TurnoutFrame.seatedBlade(r.track,stock,d,r.sign,open,localStart,blade,contact,p,s),bb=TurnoutFrame.seatedBlade(r.track,stock,e,r.sign,open,localStart,blade,contact,p,s);
                     if(previous!=null&&previousBlade)ba=previous;
                     double derivativeStep=.0001;
-                    V3 na=switchRail(r,d+derivativeStep,TurnoutFrame.taper(d+derivativeStep-localStart,contact),offset,open,localStart,blade,p,s)
-                        .sub(switchRail(r,d-derivativeStep,TurnoutFrame.taper(d-derivativeStep-localStart,contact),offset,open,localStart,blade,p,s)).lateral();
-                    V3 nb=switchRail(r,e+derivativeStep,TurnoutFrame.taper(e+derivativeStep-localStart,contact),offset,open,localStart,blade,p,s)
-                        .sub(switchRail(r,e-derivativeStep,TurnoutFrame.taper(e-derivativeStep-localStart,contact),offset,open,localStart,blade,p,s)).lateral();
+                    V3 na=TurnoutFrame.seatedBlade(r.track,stock,d+derivativeStep,r.sign,open,localStart,blade,contact,p,s)
+                        .sub(TurnoutFrame.seatedBlade(r.track,stock,d-derivativeStep,r.sign,open,localStart,blade,contact,p,s)).lateral();
+                    V3 nb=TurnoutFrame.seatedBlade(r.track,stock,e+derivativeStep,r.sign,open,localStart,blade,contact,p,s)
+                        .sub(TurnoutFrame.seatedBlade(r.track,stock,e-derivativeStep,r.sign,open,localStart,blade,contact,p,s)).lateral();
                     if(e>=localStart+blade-1e-9)nb=r.track.tangent(e).lateral();
-                    mesh.rail(ba,bb,na,nb,ta,tb,p,s,"blade");
+                    mesh.blade(ba,bb,na,nb,ta,tb,p,s,r.sign);
                     b=bb;
                 } else {
                     b=running(r,e,offset);
@@ -133,12 +134,6 @@ public final class PointMesh {
         return mesh;
     }
     private static V3 running(Running r,double s,double offset){return r.track.at(s).add(r.track.tangent(s).lateral().mul(r.sign*offset));}
-    /** The switch rail runs with its gauge face flush against the stock rail's gauge face, so its
-     *  centre stands half its own planed width off the running line, and a thrown point swings it
-     *  into the gauge by the throw. */
-    private static V3 switchRail(Running r,double station,double taper,double offset,double open,double start,double length,Profile p,PointSettings s){
-        return TurnoutFrame.blade(r.track,station,r.sign,offset-p.headWidth()/2+taper*p.headWidth()/2,open,start,length,s);
-    }
     public static V3 sleeperNormal(Junction j,PointSettings s,double distance,double start,double end){
         double t=Math.max(0,Math.min(1,(distance-start)/Math.max(.001,end-start)));
         V3 direction;

@@ -16,19 +16,66 @@ public final class SwitchBladeRegression {
 
     public static void run(){
         Profile raw=Profile.STANDARD;PointSettings s=PointSettings.DEFAULT;
+        lSection(raw,s);
         for(double curve:new double[]{.0185,-.0185}){
             String label=curve>0?"diverging left":"diverging right";
             Junction j=turnout(curve);
             for(double position:new double[]{0,1})runningSurface(label,j,s,raw,position);
             planing(label,j,s,raw);
+            closedTips(label,j,s,raw);
         }
         PointSettings custom=s.with(10,.076);
         planing("custom head width",turnout(.0185),custom,raw);
+        closedTips("custom head width",turnout(.0185),custom,raw);
         double blade=9,contact=TurnoutFrame.contact(blade,raw.tune(s),s);
         require(contact>2.1&&contact<2.35,"Contact length of a 9 m switch rail must stay the short tip region, got "+contact);
         require(contact<blade*.3,"Contact length must be a fraction of the switch rail, got "+contact+" of "+blade);
         require(Math.abs(TurnoutFrame.contact(blade,raw.tune(s),s)-TurnoutFrame.contact(blade,raw.tune(s.with(10,.076)),s))>.2,"A wider head must move the contact length");
         System.out.println("PASS: switch-rail contact region is the planed tip only, for the default and a custom section");
+    }
+    public static void lSection(Profile raw,PointSettings s){
+        Profile p=raw.tune(s);double footWidth=p.detail()==null?p.footWidth():p.detail().rails().stream()
+            .flatMap(q->java.util.stream.Stream.of(q.a(),q.b(),q.c(),q.d()))
+            .mapToDouble(v->Math.abs(v.x()-p.detail().railCenter())*2*p.headWidth()/p.detail().headWidth()).max().orElseThrow();
+        double bottom=p.detail()==null?p.top()-p.railHeight():p.top()-p.detail().railTop()+p.detail().rails().stream()
+            .flatMap(q->java.util.stream.Stream.of(q.a(),q.b(),q.c(),q.d())).mapToDouble(V3::y).min().orElseThrow();
+        for(int side:new int[]{-1,1}){
+            Mesh tip=new Mesh();tip.blade(V3.ZERO,new V3(0,0,1),new V3(1,0,0),new V3(1,0,0),TurnoutFrame.TIP_TAPER,TurnoutFrame.TIP_TAPER,p,s,side);
+            var foot=tip.quads.stream().flatMap(q->java.util.stream.Stream.of(q.a(),q.b(),q.c(),q.d())).filter(v->Math.abs(v.y()-bottom)<1e-7).toList();
+            double nearest=foot.stream().mapToDouble(v->v.x()*side).max().orElseThrow();
+            double stockEdge=p.headWidth()*TurnoutFrame.TIP_TAPER/2-(footWidth-p.headWidth())/2;
+            require(nearest<stockEdge,"Planed blade foot penetrates stock foot: "+p.source()+" side="+side);
+            double away=foot.stream().mapToDouble(v->v.x()*side).min().orElseThrow();
+            require(nearest-away>footWidth*.4,"L-section lost its opposite foot flange");
+            Mesh full=new Mesh();full.blade(V3.ZERO,new V3(0,0,1),new V3(1,0,0),new V3(1,0,0),1,1,p,s,side);
+            Mesh ordinary=new Mesh();ordinary.rail(V3.ZERO,new V3(0,0,1),new V3(1,0,0),new V3(1,0,0),1,1,p,s,"blade");
+            require(full.quads.equals(ordinary.quads),"Blade did not restore the complete I-section");
+        }
+        System.out.println("BLADE_L_SECTION: PASS "+p.source()+" mirrored tips clear stock foot, retain opposite flange and restore full section");
+    }
+
+    public static void closedTips(String label,Junction j,PointSettings s,Profile raw){
+        Profile p=raw.tune(s);double side=TurnoutFrame.side(j,PointMesh.extent(j,s));
+        for(int branch=0;branch<2;branch++){
+            Track road=branch==0?j.a():j.b(),stock=branch==0?j.b():j.a();double sign=branch==0?side:-side;
+            double worstClosed=0,openedGap=0;
+            for(double open:new double[]{0,1}){
+                Mesh mesh=PointMesh.build(j,s,raw,branch==0?open:1-open);
+                var heads=surfaceTops(mesh,p.top()+s.verticalOffset()).stream().filter(q->q.part().equals("blade"))
+                    .filter(q->{double d=road.nearest(q.center());return q.center().sub(road.at(d)).dot(road.tangent(d).lateral())*sign>.4;}).toList();
+                var first=heads.stream().min(Comparator.comparingDouble(q->road.nearest(q.center()))).orElseThrow();
+                var vertices=new ArrayList<>(List.of(first.a(),first.b(),first.c(),first.d()));
+                vertices.sort(Comparator.comparingDouble(road::nearest));
+                V3 edge=vertices.subList(0,2).stream().max(Comparator.comparingDouble(v->{double d=road.nearest(v);return v.sub(road.at(d)).dot(road.tangent(d).lateral())*sign;})).orElseThrow();
+                double at=TurnoutFrame.nearestOffset(stock,edge,sign*p.centerOffset());
+                V3 stockEdge=stock.at(at).add(stock.tangent(at).lateral().mul(sign*(p.centerOffset()-p.headWidth()/2))).add(0,p.top()+s.verticalOffset(),0);
+                double gap=edge.distance(stockEdge);
+                if(open==0)worstClosed=gap;else openedGap=gap;
+            }
+            require(worstClosed<.001,label+": closed blade tip leaves a "+worstClosed+" m gap on branch "+branch);
+            require(openedGap>s.throwDistance()*.7,label+": open blade tip lost its clearance on branch "+branch+": "+openedGap);
+        }
+        System.out.println("BLADE_CONTACT: PASS "+label+" both closed tips within 1 mm of stock head, open tips clear");
     }
 
     /** Every station of the route in service must carry running-surface steel: the old geometry left

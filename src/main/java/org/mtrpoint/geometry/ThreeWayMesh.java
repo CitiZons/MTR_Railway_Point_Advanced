@@ -56,12 +56,19 @@ public final class ThreeWayMesh {
                     // was a visible sliver hugging it, and at full section (blade away) it duplicated it.
                     // The drop is unconditional, so every pose loses exactly the same faces and the
                     // animated topology keeps its fixed face count.
-                    x=TurnoutFrame.blade(road,a,sign,p.centerOffset(),open,bladeStart,blade,s);
-                    y=TurnoutFrame.blade(road,b,sign,p.centerOffset(),open,bladeStart,blade,s);
+                    Track stock=roads.get(branch+sign);
+                    x=TurnoutFrame.seatedBlade(road,stock,a,sign,open,bladeStart,blade,contact,p,s);
+                    y=TurnoutFrame.seatedBlade(road,stock,b,sign,open,bladeStart,blade,contact,p,s);
                     if(previous!=null&&previousBlade)x=previous;
+                    double step=.0001;
+                    V3 na=TurnoutFrame.seatedBlade(road,stock,a+step,sign,open,bladeStart,blade,contact,p,s)
+                        .sub(TurnoutFrame.seatedBlade(road,stock,a-step,sign,open,bladeStart,blade,contact,p,s)).lateral();
+                    V3 nb=TurnoutFrame.seatedBlade(road,stock,b+step,sign,open,bladeStart,blade,contact,p,s)
+                        .sub(TurnoutFrame.seatedBlade(road,stock,b-step,sign,open,bladeStart,blade,contact,p,s)).lateral();
+                    if(b>=bladeStart+blade-1e-9)nb=road.tangent(b).lateral();
+                    m.blade(x,y,na,nb,wa,wb,p,s,sign);
                 } else y=rail(road,b,sign,p);
-                if(planed)m.rail(x,y,wa,wb,p,s,"blade");
-                else m.rail(x,y,road.tangent(a).lateral(),road.tangent(b).lateral(),wa,wb,p,s,"rail");
+                if(!planed)m.rail(x,y,road.tangent(a).lateral(),road.tangent(b).lateral(),wa,wb,p,s,"rail");
                 previous=y;previousBlade=planed;
             }
         }

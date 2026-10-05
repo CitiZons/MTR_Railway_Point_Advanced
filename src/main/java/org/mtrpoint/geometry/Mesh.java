@@ -39,6 +39,12 @@ public final class Mesh {
     }
     /** Adjacent curve segments share a cross-section frame, including native model vertices. */
     public void rail(V3 a,V3 b,V3 normalA,V3 normalB,double taperA,double taperB,Profile p,PointSettings s,String part) {
+        sweptRail(a,b,normalA,normalB,taperA,taperB,p,s,part,0);
+    }
+    public void blade(V3 a,V3 b,V3 normalA,V3 normalB,double taperA,double taperB,Profile p,PointSettings s,double stockSide){
+        sweptRail(a,b,normalA,normalB,taperA,taperB,p,s,"blade",stockSide);
+    }
+    private void sweptRail(V3 a,V3 b,V3 normalA,V3 normalB,double taperA,double taperB,Profile p,PointSettings s,String part,double stockSide){
         Mesh section=new Mesh();section.rail(a,b,taperA,taperB,p,s,part);
         // This sweep joins adjacent fixed sections and native rendering windows.
         // The built-in beam's transverse faces are not physical rail ends.
@@ -47,12 +53,27 @@ public final class Mesh {
         V3 delta=b.sub(a),normal=delta.lateral();
         double length2=delta.x()*delta.x()+delta.z()*delta.z();
         if(length2<1e-16){quads.addAll(section.quads);return;}
+        double footWidth=p.detail()==null?p.footWidth():p.detail().rails().stream()
+            .flatMap(q->java.util.stream.Stream.of(q.a(),q.b(),q.c(),q.d()))
+            .mapToDouble(v->Math.abs(v.x()-p.detail().railCenter())*2*p.headWidth()/p.detail().headWidth()).max().orElse(p.footWidth());
         java.util.function.Function<V3,V3> frame=v->{
             V3 relative=v.sub(a);double t=(relative.x()*delta.x()+relative.z()*delta.z())/length2;
             // Snap endpoints so both segments calculate exactly the same frame and centre.
             if(Math.abs(t)<1e-9)t=0;else if(Math.abs(t-1)<1e-9)t=1;
             V3 center=t==0?a:t==1?b:a.lerp(b,t);
-            return center.add(normalA.lerp(normalB,t).mul(relative.dot(normal))).add(0,v.y()-center.y(),0);
+            double across=relative.dot(normal);
+            if(stockSide!=0){
+                double taper=taperA+(taperB-taperA)*t;
+                double top=p.top()+s.verticalOffset(),headBottom=top-.036;
+                double lower=Math.max(0,Math.min(1,(headBottom-(v.y()-center.y()))/Math.max(.001,p.railHeight()-.036)));
+                // Plane away the stock-facing flange and move the lower web inward.
+                // Retain the opposite flange: the tip is an L section, not a tiny I.
+                double clearance=(footWidth-p.headWidth())/2+.001;
+                double original=across/Math.max(TurnoutFrame.TIP_TAPER,taper);
+                across-=stockSide*(clearance+(footWidth-p.headWidth())*taper)*(1-taper)*lower;
+                if(original*stockSide<0)across+=original*(1-taper)*lower;
+            }
+            return center.add(normalA.lerp(normalB,t).mul(across)).add(0,v.y()-center.y(),0);
         };
         for(var q:section.quads)quad(new Quad(frame.apply(q.a()),frame.apply(q.b()),frame.apply(q.c()),frame.apply(q.d()),q.surface(),part,q.index(),q.uv()));
     }
