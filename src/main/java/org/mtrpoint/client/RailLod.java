@@ -14,9 +14,12 @@ public final class RailLod {
     private static double nearDistance=-1,farDistance=-1;
     private static RailDetailDistances distances;
     private record Levels(ProfileModel[] models,RailResource[] resources) {}
+    private record ChunkKey(String id,int x,int y,int z) {}
     private static final Map<String,Levels> LEVELS=new HashMap<>();
+    private static final Map<ChunkKey,Integer> CHUNK_LEVELS=new HashMap<>();
+    private static final int MAX_CHUNK_LEVELS=8192;
     public static final long[] draws=new long[3];
-    public static void clear(){LEVELS.clear();Arrays.fill(draws,0);}
+    public static void clear(){LEVELS.clear();CHUNK_LEVELS.clear();Arrays.fill(draws,0);}
     public static ProfileModel register(String id,RailResource source,ProfileModel high,JsonObject descriptor,ObjTemplate.Reader reader)throws Exception{
         if(!descriptor.has("lod")||!descriptor.getAsJsonObject("lod").has("mid")||!descriptor.getAsJsonObject("lod").has("far"))return high;
         var access=(RailResourceAccess)(Object)source;ProfileModel[] models={high,null,null};RailResource[] resources=new RailResource[3];
@@ -44,17 +47,31 @@ public final class RailLod {
     }
     public static RailDetailDistances distances(){
         double near=org.mtrpoint.PointConfig.lodNear(),far=org.mtrpoint.PointConfig.lodFar();
-        if(near!=nearDistance||far!=farDistance){nearDistance=near;farDistance=far;distances=RailDetailDistances.metres(near,far);}
+        if(near!=nearDistance||far!=farDistance){nearDistance=near;farDistance=far;distances=RailDetailDistances.metres(near,far);CHUNK_LEVELS.clear();}
         return distances;
     }
     public static int level(double distanceSquared){return distances().level(distanceSquared);}
     public static int level(V3 position){var p=Minecraft.getInstance().gameRenderer.getMainCamera().getPosition();double x=p.x-position.x(),y=p.y-position.y(),z=p.z-position.z();return level(x*x+y*y+z*z);}
+    private static int chunkLevel(String id,V3 position){
+        var p=Minecraft.getInstance().gameRenderer.getMainCamera().getPosition();
+        int x=(int)Math.floor(position.x()/8),y=(int)Math.floor(position.y()/8),z=(int)Math.floor(position.z()/8);
+        var key=new ChunkKey(id,x,y,z);double cx=x*8+4,cy=y*8+4,cz=z*8+4;
+        double dx=p.x-cx,dy=p.y-cy,dz=p.z-cz,d=dx*dx+dy*dy+dz*dz;
+        int base=distances().level(d),previous=CHUNK_LEVELS.getOrDefault(key,base),next=base;
+        double near=nearDistance*nearDistance,far=Math.max(nearDistance,farDistance);far*=far;
+        double nearIn=near*.81,nearOut=near*1.21,farIn=far*.81,farOut=far*1.21;
+        if(previous==0&&d<nearOut)next=0;
+        else if(previous==2&&d>farIn)next=2;
+        else if(previous==1&&d>=nearIn&&d<=farOut)next=1;
+        if(CHUNK_LEVELS.size()>=MAX_CHUNK_LEVELS&&!CHUNK_LEVELS.containsKey(key))CHUNK_LEVELS.clear();
+        CHUNK_LEVELS.put(key,next);return next;
+    }
     public static ProfileModel model(String id,V3 position){Profiles.get(id);var levels=LEVELS.get(id);return levels==null?Profiles.model(id):levels.models[level(position)];}
     public static boolean render(org.mtr.core.data.Rail rail,RailResource source,boolean flip,V3 a,V3 b){
         // MTR can expose the same resource with a direction suffix (for example _1/_2).
         // LOD registration is keyed by the canonical style, so looking up the raw resource
         // id would silently fall back to MTR's renderer for only those cells.
-        var levels=LEVELS.get(Profiles.canonical(source.getId()));if(levels==null)return false;int level=level(a.lerp(b,.5));
+        var levels=LEVELS.get(Profiles.canonical(source.getId()));if(levels==null)return false;int level=chunkLevel(Profiles.canonical(source.getId()),a.lerp(b,.5));
         var model=levels.models[level];
         if(model.continuousGuard()!=null)return false;
         draws[level]++;var sweep=RailSampler.sweep(rail,source,a,b);

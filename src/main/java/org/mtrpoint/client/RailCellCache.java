@@ -6,6 +6,8 @@ import java.util.*;
 
 /** Small persistent world batches; unchanged frames allocate no transformed vertices or GPU uploads. */
 final class RailCellCache {
+    private static final boolean PROFILE=Boolean.getBoolean("mtrpoint.profile");
+    private static long profileSince,profileFinishNanos,profileBedNanos,profileJointNanos,profileRebuilds,profileBedRebuilds,profileJointRebuilds;
     private record Chunk(int x,int y,int z){}
     // A shared batch lets diverging beds union even across the ordinary 8 m
     // cache boundary. It rebuilds only when the submitted visible cells change.
@@ -63,7 +65,7 @@ final class RailCellCache {
     }
     static void clear(){CACHED.values().forEach(b->b.gpu.close());CACHED.clear();JOINTS.gpu.close();JOINTS.mesh=null;jointSources=List.of();SPLITS.clear();splitFaces=0;discard();builds=transformedVertices=0;}
     static void finish(Mesh turnoutSteel){
-        frame++;ACTIVE.clear();long now=System.nanoTime();
+        frame++;ACTIVE.clear();long now=System.nanoTime(),started=now;long before=builds;
         for(var entry:QUEUED.entrySet()){
             if(entry.getValue().isEmpty())continue;
             Batch batch=CACHED.computeIfAbsent(entry.getKey(),k->new Batch());batch.seenAt=now;
@@ -79,7 +81,10 @@ final class RailCellCache {
                         mesh.quad(new Mesh.Quad(transform.apply(q.a()),transform.apply(q.b()),transform.apply(q.c()),transform.apply(q.d()),q.surface(),worldPart(q),-1,q.uv()));
                     }
                 }
-                batch.mesh=entry.getKey().equals(BEDS)?SurfaceUnion.build(mesh):mesh;builds++;
+                if(entry.getKey().equals(BEDS)){
+                    long t=System.nanoTime();batch.mesh=SurfaceUnion.build(mesh);if(PROFILE){profileBedNanos+=System.nanoTime()-t;profileBedRebuilds++;}
+                }else batch.mesh=mesh;
+                builds++;
             }
             ACTIVE.add(batch);
         }
@@ -87,14 +92,28 @@ final class RailCellCache {
         // same cells every frame; retaining these containers avoids a large transient allocation
         // spike while the cell contents are replaced in-place on the next submit.
         QUEUED.entrySet().removeIf(entry->entry.getValue().isEmpty());
-        var sources=new ArrayList<Mesh>();sources.add(turnoutSteel);for(var batch:ACTIVE)sources.add(batch.mesh);
+        // Use the short-lived cache for seam generation. The native renderer may
+        // omit cells from this frame's queue while the camera rotates; using ACTIVE
+        // here would rebuild every bridge set on each visibility change.
+        var sources=new ArrayList<Mesh>();sources.add(turnoutSteel);for(var batch:CACHED.values())if(batch.mesh!=null)sources.add(batch.mesh);
         if(!sources.equals(jointSources)){
-            jointSources=List.copyOf(sources);Mesh steel=new Mesh();
+            jointSources=List.copyOf(sources);Mesh steel=new Mesh();long t=System.nanoTime();
             for(var source:sources)for(var q:source.quads)if(RailJoints.seamSurface(q.part()))steel.quad(q);
             JOINTS.mesh=RailJoints.bridges(steel,true);
+            if(PROFILE){profileJointNanos+=System.nanoTime()-t;profileJointRebuilds++;}
         }
         if(JOINTS.mesh!=null&&!JOINTS.mesh.quads.isEmpty())ACTIVE.add(JOINTS);
         for(var it=CACHED.values().iterator();it.hasNext();){var b=it.next();if(now-b.seenAt>3_000_000_000L){b.gpu.close();it.remove();}}
+        if(PROFILE){
+            if(profileSince==0)profileSince=now;profileFinishNanos+=System.nanoTime()-started;profileRebuilds+=builds-before;
+            if(now-profileSince>=1_000_000_000L){
+                org.mtrpoint.PointMod.LOG.info("Point profile: finish={}ms rebuilds={} beds={}ms/{} joints={}ms/{}",profileFinishNanos/1_000_000D,profileRebuilds,profileBedNanos/1_000_000D,profileBedRebuilds,profileJointNanos/1_000_000D,profileJointRebuilds);
+                profileSince=now;profileFinishNanos=profileBedNanos=profileJointNanos=profileRebuilds=profileBedRebuilds=profileJointRebuilds=0;
+            }
+        }
     }
-    static void draw(RenderLevelStageEvent e){for(var b:ACTIVE)if(b.gpu.visible(e)){b.gpu.update(b.mesh,0,false,false);b.gpu.draw(e);}}
+    static void draw(RenderLevelStageEvent e){
+        for(var b:CACHED.values())if(b.mesh!=null&&b.gpu.visible(e)){b.gpu.update(b.mesh,0,false,false);b.gpu.draw(e);}
+        if(JOINTS.mesh!=null&&!JOINTS.mesh.quads.isEmpty()&&JOINTS.gpu.visible(e)){JOINTS.gpu.update(JOINTS.mesh,0,false,false);JOINTS.gpu.draw(e);}
+    }
 }

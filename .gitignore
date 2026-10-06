@@ -4,3 +4,14 @@ run/
 run-server/
 .idea/
 .agent-tasks/
+
+# Local profiling output and temporary analysis files
+/.claude/
+/.gradle-home/
+/logs/
+/*.log
+/*.txt
+/*.jsh
+/head_pointmesh.java
+/probe.init.gradle
+/tools/_env_probe.py

@@ -4,7 +4,7 @@ import java.util.*;
 
 /** Fill only the narrow open seam between otherwise adjoining rail or ballast faces. */
 public final class RailJoints {
-    private static final double LIMIT=.006;
+    private static final double LIMIT=.05;
     private static final Set<String> STEEL=Set.of("rail","frog","wing","guard");
     public static boolean nativeSteel(String part){return part.startsWith("rail_")&&!part.equals("rail_joint")&&!part.endsWith("_end");}
     public static boolean steel(String part){return STEEL.contains(part)||part.equals("blade_heel")||nativeSteel(part);}
@@ -15,7 +15,10 @@ public final class RailJoints {
     }
     private record EdgeKey(Key a,Key b){static EdgeKey of(V3 a,V3 b){Key x=Key.of(a),y=Key.of(b);return x.compareTo(y)<0?new EdgeKey(x,y):new EdgeKey(y,x);}}
     private record Edge(V3 a,V3 b,V3 normal,Mesh.Quad face,int corner){V3 center(){return a.lerp(b,.5);}}
-    private record Cell(long x,long y,long z){static Cell of(V3 v){return new Cell((long)Math.floor(v.x()/.25),(long)Math.floor(v.y()/.25),(long)Math.floor(v.z()/.25));}}
+    // Keep a practical 5 cm spatial grid while the actual seam tolerance remains
+    // LIMIT. The neighbouring-bin search preserves matches across cell borders.
+    private static final double GRID=.05;
+    private record Cell(long x,long y,long z){static Cell of(V3 v){return new Cell((long)Math.floor(v.x()/GRID),(long)Math.floor(v.y()/GRID),(long)Math.floor(v.z()/GRID));}}
     private record Pair(Edge a,Edge b,boolean reverse,double gap){}
     private static V3 cross(V3 a,V3 b){return new V3(a.y()*b.z()-a.z()*b.y(),a.z()*b.x()-a.x()*b.z(),a.x()*b.y()-a.y()*b.x());}
     public static Mesh bridges(Mesh steel){
