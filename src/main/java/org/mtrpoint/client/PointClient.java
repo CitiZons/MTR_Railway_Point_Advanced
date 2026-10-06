@@ -117,6 +117,7 @@ public final class PointClient {
     private static int ticks;private static Object level;private static long signature;private static boolean refreshProfiles;
     private static double lastRebuildX=Double.NaN,lastRebuildZ=Double.NaN;
     private static final IdentityHashMap<View,Boolean> TAKEOVER_CACHE=new IdentityHashMap<>();
+    private static final Set<String> NATIVE_STYLE_FAMILY=Set.of("default","default_3d","default_3d_siding");
     private static double takeoverCameraX=Double.NaN,takeoverCameraY=Double.NaN,takeoverCameraZ=Double.NaN,takeoverCachedDistance=-1;
     private static int serverFeatures;private static int serverModelFormat=-1;private static boolean handshakeComplete;
     public static String message="";
@@ -360,7 +361,7 @@ public final class PointClient {
     /** The native-cell decision for an explicit view set, shared with the renderer mixin so the
      *  rule that hides a native cell and the boundary the mod draws to stay one decision. */
     static boolean suppress(List<View> candidates,String railId,String style,V3 p,double margin){
-        if(railId==null)return false;style=Profiles.canonical(style);
+        if(railId==null||candidates.isEmpty())return false;style=Profiles.canonical(style);
         for(View v:candidates)if(v.settings.enabled()&&!v.styles.isEmpty()&&matchesNativeStyle(v.styles,style)){
             if(!takeoverVisible(v))continue;
             Junction j=v.junction;
@@ -384,7 +385,7 @@ public final class PointClient {
      * leaves a default-material cell visible beside its replacement mesh. */
     private static boolean matchesNativeStyle(Set<String> styles,String style){
         if(styles.contains(style))return true;
-        if(!Set.of("default","default_3d","default_3d_siding").contains(style))return false;
+        if(!NATIVE_STYLE_FAMILY.contains(style))return false;
         return styles.contains("default")||styles.contains("default_3d")||styles.contains("default_3d_siding");
     }
     private static void choose(View v){

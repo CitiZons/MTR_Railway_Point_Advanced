@@ -21,6 +21,7 @@ final class PointGpu implements AutoCloseable {
     // BufferBuilder owns native memory; reuse one staging buffer instead of allocating per throw.
     private static final BufferBuilder STAGING=new BufferBuilder(262144);
     private final List<Batch> fixed=new ArrayList<>(),moving=new ArrayList<>();
+    private final List<Batch> orderedFixed=new ArrayList<>(),orderedMoving=new ArrayList<>();
     private final List<Integer> staticIds=new ArrayList<>(),movingIds=new ArrayList<>();
     private Mesh source;private double frame;private long lightTick=-100;private V3 origin;private AABB bounds;
     private final Map<Long,Integer> bakedLight=new HashMap<>();
@@ -51,8 +52,8 @@ final class PointGpu implements AutoCloseable {
         // Block light updates are infrequent; sky brightness itself is applied by the lightmap.
         boolean light=false;
         if(tick-lightTick>=20){for(var entry:bakedLight.entrySet()){int value=LevelRenderer.getLightColor(mc.level,BlockPos.of(entry.getKey()));if(value!=entry.getValue()){entry.setValue(value);light=true;}}lightTick=tick;}
-        if(changed||light)upload(fixed,staticIds);
-        if(changed||light||frame!=position)upload(moving,movingIds);
+        if(changed||light){upload(fixed,staticIds);resort(fixed,orderedFixed);}
+        if(changed||light||frame!=position){upload(moving,movingIds);resort(moving,orderedMoving);}
         if(changed)lightTick=tick-(Math.abs(System.identityHashCode(this))%20);frame=position;
     }
     private void upload(List<Batch> target,List<Integer> ids){
@@ -82,21 +83,22 @@ final class PointGpu implements AutoCloseable {
             Group group=entry.getKey();target.add(new Batch(gpu,PointRenderType.texture(new ResourceLocation(group.texture)),group.lod,new V3(group.x*4+2,group.y*4+2,group.z*4+2),entry.getValue().size()));uploads++;
         }
     }
+    private static void resort(List<Batch> source,List<Batch> target){
+        target.clear();target.addAll(source);target.sort(Comparator.comparingInt(b->System.identityHashCode(b.type)));
+    }
     boolean visible(RenderLevelStageEvent e){return bounds==null||e.getFrustum().isVisible(bounds);}
     boolean hasSource(Mesh mesh){return source==mesh;}
     void draw(RenderLevelStageEvent e){
         if(bounds==null||!e.getFrustum().isVisible(bounds))return;
         var camera=e.getCamera().getPosition();Matrix4f pose=new Matrix4f(e.getPoseStack().last().pose()).translate((float)(origin.x()-camera.x),(float)(origin.y()-camera.y),(float)(origin.z()-camera.z));
         var distances=RailLod.distances();
-        draw(fixed,pose,e.getProjectionMatrix(),camera,distances);draw(moving,pose,e.getProjectionMatrix(),camera,distances);
+        draw(orderedFixed,pose,e.getProjectionMatrix(),camera,distances);draw(orderedMoving,pose,e.getProjectionMatrix(),camera,distances);
     }
     private static void draw(List<Batch> batches,Matrix4f pose,Matrix4f projection,net.minecraft.world.phys.Vec3 camera,RailDetailDistances distances){
         if(batches.isEmpty())return;
-        var ordered=new ArrayList<>(batches);
-        ordered.sort(Comparator.comparingInt(b->System.identityHashCode(b.type)));
         RenderType activeType=null;org.joml.Vector3f previous0=null,previous1=null;ShaderInstance shader=null;
         try{
-            for(var b:ordered){
+            for(var b:batches){
                 if(b.lod>=0){double x=b.center.x()-camera.x,y=b.center.y()-camera.y,z=b.center.z()-camera.z;if(distances.level(x*x+y*y+z*z)!=b.lod)continue;}
                 if(activeType!=b.type){
                     if(activeType!=null){if(previous0!=null)RenderSystem.setShaderLights(previous0,previous1);activeType.clearRenderState();}
@@ -116,5 +118,5 @@ final class PointGpu implements AutoCloseable {
         var camera=Minecraft.getInstance().gameRenderer.getMainCamera().getPosition();
         draw(batches,pose,projection,camera,RailLod.distances());
     }
-    public void close(){fixed.forEach(b->b.buffer.close());moving.forEach(b->b.buffer.close());fixed.clear();moving.clear();source=null;bounds=null;}
+    public void close(){fixed.forEach(b->b.buffer.close());moving.forEach(b->b.buffer.close());fixed.clear();moving.clear();orderedFixed.clear();orderedMoving.clear();source=null;bounds=null;}
 }
