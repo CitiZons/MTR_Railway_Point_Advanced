@@ -10,7 +10,7 @@
 
 将 `mtr_railway_point_advanced-0.1.7.jar` 放入客户端和服务器的 `mods` 文件夹；两端使用相同构建，不要同时安装多个版本。网络协议为 `3`。`point-runtime-probe` 是开发探针，不用于正式游戏。
 
-配套资源包为 **Citizons Railway 0.1.3**，启用后提供有砟、无砟有枕、无砟无枕及连续护轨样式。Mod 和资源包的版本号独立。
+配套资源包为 **[Citizons Railway](https://github.com/CitiZons/MTR_Citizons_Railway) 0.1.3**，启用后提供有砟、无砟有枕、无砟无枕及连续护轨样式。Mod 和资源包的版本号独立。
 
 ## 使用
 

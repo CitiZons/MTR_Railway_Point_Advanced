@@ -12,7 +12,7 @@ Requires Minecraft **1.20.1**, Forge **47.4.18** and MTR Forge **4.0.3**.
 
 Install `mtr_railway_point_advanced-0.1.7.jar` in both client and server `mods` folders. Use the same build on both sides and remove older copies. The network protocol is `3`; do not install the development-only `point-runtime-probe` in a normal game.
 
-The companion pack is **Citizons Railway 0.1.3**, with ballast, slab, direct-support and continuous-guard styles. The mod and pack have separate version numbers.
+The companion pack is **[Citizons Railway](https://github.com/CitiZons/MTR_Citizons_Railway) 0.1.3**, with ballast, slab, direct-support and continuous-guard styles. The mod and pack have separate version numbers.
 
 ## Usage
 
