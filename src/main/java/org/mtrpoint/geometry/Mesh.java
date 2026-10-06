@@ -5,6 +5,7 @@ import java.util.*;
 public final class Mesh {
     /** Diagnostics used by the saved-layout smoke probe; reset by the probe before rebuilding. */
     public static long CAP_CALLS, CAP_LOOPS, CAP_FACES, CAP_EDGE_CANDIDATES, CAP_EDGE_UNIQUE, CAP_OUTLINE_POINTS;
+    private static final java.util.Map<Profile.Surface,List<Float>> CENTER_UV_CACHE=new java.util.HashMap<>();
     public record Quad(V3 a,V3 b,V3 c,V3 d,Profile.Surface surface,String part,int index,java.util.List<Float> uv) {
         public Quad(V3 a,V3 b,V3 c,V3 d,Profile.Surface surface,String part,int index){this(a,b,c,d,surface,part,index,null);}
         public V3 center(){return a.add(b).add(c).add(d).mul(.25);}
@@ -14,7 +15,7 @@ public final class Mesh {
      *  without uv renders untextured, which is exactly what made end faces read as open holes, so
      *  every emission path is funnelled through this instead of passing null. */
     public static List<Float> centerUv(Profile.Surface s){
-        float u=(s.u0()+s.u1())/2,v=(s.v0()+s.v1())/2;return List.of(u,v,u,v,u,v,u,v);
+        return CENTER_UV_CACHE.computeIfAbsent(s,key->{float u=(key.u0()+key.u1())/2,v=(key.v0()+key.v1())/2;return List.of(u,v,u,v,u,v,u,v);});
     }
     public void quad(V3 a,V3 b,V3 c,V3 d,Profile.Surface surface,String part,int index){quads.add(new Quad(a,b,c,d,surface,part,index,centerUv(surface)));}
     public void quad(Quad q){quads.add(q.uv()!=null?q:new Quad(q.a(),q.b(),q.c(),q.d(),q.surface(),q.part(),q.index(),centerUv(q.surface())));}

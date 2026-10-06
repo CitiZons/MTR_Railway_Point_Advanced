@@ -11,6 +11,7 @@ final class ContinuousGuards {
     private static final Map<List<Mesh.Quad>,Map<String,List<Mesh.Quad>>> CLIPS=Collections.synchronizedMap(new IdentityHashMap<>());
     private static final Map<String,Ends> FRAME_ENDS=new HashMap<>();
     private static final Set<String> FRAME_TERMINALS=new HashSet<>();
+    private static final int MAX_CLIP_SOURCES=512;
     static void begin(){FRAME_ENDS.clear();FRAME_TERMINALS.clear();}
     static void clear(){FRAME_ENDS.clear();FRAME_TERMINALS.clear();CLIPS.clear();}
 
@@ -30,7 +31,14 @@ final class ContinuousGuards {
 
     static double reach(Track track,double length,Ends ends,boolean start){if(start&&!ends.start||!start&&!ends.end)return 0;return Math.min(length,track.length/(ends.start&&ends.end?2:1));}
     static List<Mesh.Quad> clip(List<Mesh.Quad> faces,double from,double to){
-        String key=Double.doubleToLongBits(from)+":"+Double.doubleToLongBits(to);var cached=CLIPS.computeIfAbsent(faces,k->new HashMap<>());var found=cached.get(key);if(found!=null)return found;
+        String key=Double.doubleToLongBits(from)+":"+Double.doubleToLongBits(to);
+        var cached=CLIPS.get(faces);
+        if(cached==null){
+            synchronized(CLIPS){
+                while(CLIPS.size()>=MAX_CLIP_SOURCES&&!CLIPS.containsKey(faces)){var it=CLIPS.keySet().iterator();if(!it.hasNext())break;it.next();it.remove();}
+                cached=CLIPS.computeIfAbsent(faces,k->new HashMap<>());
+            }
+        }var found=cached.get(key);if(found!=null)return found;
         Mesh after=new Mesh();for(var q:faces)Mesh.clip(after,q,new V3(0,0,from),new V3(0,0,-1));
         Mesh before=new Mesh();for(var q:after.quads)Mesh.clip(before,q,new V3(0,0,to),new V3(0,0,1));found=List.copyOf(before.quads);cached.put(key,found);return found;
     }

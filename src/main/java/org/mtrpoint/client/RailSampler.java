@@ -10,7 +10,8 @@ public final class RailSampler {
     private record Sample(Track track,List<Bank> banks,Rail rail,Object nodeA,Object nodeB) {}
     private static final Map<String,Sample> SAMPLES=new HashMap<>();
     private record ModelFrames(Sample sample,Track line,List<RailSweep> frames,Map<Cell,RailSweep> cells) {}
-    private static final Map<String,ModelFrames> MODEL_FRAMES=new HashMap<>();
+    private record ModelKey(String railId,String style) {}
+    private static final Map<ModelKey,ModelFrames> MODEL_FRAMES=new HashMap<>();
     private static java.lang.reflect.Field frameField;
     private static java.lang.reflect.Method renderMethod,nodeMethod,bankMethod,cantAMethod,cantBMethod,tangentAMethod,tangentBMethod;
     private static boolean initialized;
@@ -185,7 +186,7 @@ public final class RailSampler {
     }
     private static ModelFrames modelFrames(String railId,String style){
         Sample sample=SAMPLES.get(railId);if(sample==null)return null;
-        String key=railId+"/"+style;ModelFrames cached=MODEL_FRAMES.get(key);if(cached!=null&&cached.sample==sample)return cached;
+        ModelKey key=new ModelKey(railId,style);ModelFrames cached=MODEL_FRAMES.get(key);if(cached!=null&&cached.sample==sample)return cached;
         org.mtr.mod.resource.RailResource[] resource={null};org.mtr.mod.client.CustomResourceLoader.getRailById(style,r->resource[0]=r);if(resource[0]==null)return null;
         var rawCells=new ArrayList<Cell>();var points=new ArrayList<V3>();var frames=new ArrayList<RailSweep>();
         RailMath.RenderRail callback=(x1,z1,x2,z2,x3,z3,x4,z4,y1,y2)->{

@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.*;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.*;
+import net.minecraft.client.renderer.ShaderInstance;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.core.BlockPos;
@@ -90,20 +91,24 @@ final class PointGpu implements AutoCloseable {
         draw(fixed,pose,e.getProjectionMatrix(),camera,distances);draw(moving,pose,e.getProjectionMatrix(),camera,distances);
     }
     private static void draw(List<Batch> batches,Matrix4f pose,Matrix4f projection,net.minecraft.world.phys.Vec3 camera,RailDetailDistances distances){
-        for(var b:batches){
-            if(b.lod>=0){double x=b.center.x()-camera.x,y=b.center.y()-camera.y,z=b.center.z()-camera.z;if(distances.level(x*x+y*y+z*z)!=b.lod)continue;}
-            b.type.setupRenderState();
-            var shader=RenderSystem.getShader();
-            RenderSystem.setupShaderLights(shader);
-            var light0=shader.getUniform("Light0_Direction");var light1=shader.getUniform("Light1_Direction");
-            org.joml.Vector3f previous0=null,previous1=null;
-            if(light0!=null&&light1!=null){
-                previous0=PREVIOUS_LIGHT0;previous1=PREVIOUS_LIGHT1;previous0.set(light0.getFloatBuffer());previous1.set(light1.getFloatBuffer());
-                RenderSystem.setShaderLights(WORLD_LIGHT0,WORLD_LIGHT1);
+        if(batches.isEmpty())return;
+        var ordered=new ArrayList<>(batches);
+        ordered.sort(Comparator.comparingInt(b->System.identityHashCode(b.type)));
+        RenderType activeType=null;org.joml.Vector3f previous0=null,previous1=null;ShaderInstance shader=null;
+        try{
+            for(var b:ordered){
+                if(b.lod>=0){double x=b.center.x()-camera.x,y=b.center.y()-camera.y,z=b.center.z()-camera.z;if(distances.level(x*x+y*y+z*z)!=b.lod)continue;}
+                if(activeType!=b.type){
+                    if(activeType!=null){if(previous0!=null)RenderSystem.setShaderLights(previous0,previous1);activeType.clearRenderState();}
+                    activeType=b.type;activeType.setupRenderState();shader=RenderSystem.getShader();RenderSystem.setupShaderLights(shader);
+                    var light0=shader.getUniform("Light0_Direction");var light1=shader.getUniform("Light1_Direction");previous0=null;previous1=null;
+                    if(light0!=null&&light1!=null){previous0=PREVIOUS_LIGHT0;previous1=PREVIOUS_LIGHT1;previous0.set(light0.getFloatBuffer());previous1.set(light1.getFloatBuffer());RenderSystem.setShaderLights(WORLD_LIGHT0,WORLD_LIGHT1);}
+                }
+                b.buffer.bind();b.buffer.drawWithShader(pose,projection,shader);VertexBuffer.unbind();
+                draws++;submittedFaces+=b.faces;if(b.lod>=0)lodDraws[b.lod]++;
             }
-            try{b.buffer.bind();b.buffer.drawWithShader(pose,projection,shader);}
-            finally{VertexBuffer.unbind();if(previous0!=null)RenderSystem.setShaderLights(previous0,previous1);b.type.clearRenderState();}
-            draws++;submittedFaces+=b.faces;if(b.lod>=0)lodDraws[b.lod]++;
+        }finally{
+            VertexBuffer.unbind();if(activeType!=null){if(previous0!=null)RenderSystem.setShaderLights(previous0,previous1);activeType.clearRenderState();}
         }
     }
     /** Compatibility entry point retained for the isolated runtime probe. */

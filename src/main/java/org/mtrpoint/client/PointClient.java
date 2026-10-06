@@ -405,7 +405,7 @@ public final class PointClient {
     private static List<PointNetwork.Movement> nativeMovements(){
         var out=new ArrayList<PointNetwork.Movement>();
         for(var vehicle:MinecraftClientData.getInstance().vehicles){double head=((VehicleProgressAccess)vehicle).point$progress(),tail=head-vehicle.vehicleExtraData.getTotalVehicleLength();var path=vehicle.vehicleExtraData.immutablePath;
-            for(int i=1;i<path.size();i++){PathData a=path.get(i-1),b=path.get(i);double distance=a.getEndDistance();if(distance<tail||distance>head+64||a.getRail()==null||b.getRail()==null)continue;Position end=a.reversePositions?a.getOrderedPosition1():a.getOrderedPosition2(),start=b.reversePositions?b.getOrderedPosition2():b.getOrderedPosition1();if(!end.equals(start))continue;out.add(new PointNetwork.Movement(RailSampler.node(end),a.getRail().getHexId(),b.getRail().getHexId(),distance<=head,vehicle.getId(),Math.abs(distance-head)));}
+            for(int i=1;i<path.size();i++){PathData a=path.get(i-1),b=path.get(i);double distance=a.getEndDistance();if(distance<tail)continue;if(distance>head+64)break;if(a.getRail()==null||b.getRail()==null)continue;Position end=a.reversePositions?a.getOrderedPosition1():a.getOrderedPosition2(),start=b.reversePositions?b.getOrderedPosition2():b.getOrderedPosition1();if(!end.equals(start))continue;out.add(new PointNetwork.Movement(RailSampler.node(end),a.getRail().getHexId(),b.getRail().getHexId(),distance<=head,vehicle.getId(),Math.abs(distance-head)));}
         }return out;
     }
 }

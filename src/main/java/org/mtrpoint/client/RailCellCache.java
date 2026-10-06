@@ -17,7 +17,7 @@ final class RailCellCache {
     private static int splitFaces;
     private static final int MAX_SPLITS=256,MAX_SPLIT_FACES=65536;
     private static final Map<Chunk,Batch> CACHED=new HashMap<>();
-    private static final class Batch {List<Cell> cells=List.of();Mesh mesh;PointGpu gpu=new PointGpu();long seen;}
+    private static final class Batch {List<Cell> cells=List.of();Mesh mesh;PointGpu gpu=new PointGpu();long seenAt;}
     private static final List<Batch> ACTIVE=new ArrayList<>();
     private static final Batch JOINTS=new Batch();
     private static List<Mesh> jointSources=List.of();
@@ -63,10 +63,10 @@ final class RailCellCache {
     }
     static void clear(){CACHED.values().forEach(b->b.gpu.close());CACHED.clear();JOINTS.gpu.close();JOINTS.mesh=null;jointSources=List.of();SPLITS.clear();splitFaces=0;discard();builds=transformedVertices=0;}
     static void finish(Mesh turnoutSteel){
-        frame++;ACTIVE.clear();
+        frame++;ACTIVE.clear();long now=System.nanoTime();
         for(var entry:QUEUED.entrySet()){
             if(entry.getValue().isEmpty())continue;
-            Batch batch=CACHED.computeIfAbsent(entry.getKey(),k->new Batch());batch.seen=frame;
+            Batch batch=CACHED.computeIfAbsent(entry.getKey(),k->new Batch());batch.seenAt=now;
             if(!batch.cells.equals(entry.getValue())){
                 batch.cells=List.copyOf(entry.getValue());Mesh mesh=new Mesh();
                 for(Cell cell:batch.cells){
@@ -94,7 +94,7 @@ final class RailCellCache {
             JOINTS.mesh=RailJoints.bridges(steel,true);
         }
         if(JOINTS.mesh!=null&&!JOINTS.mesh.quads.isEmpty())ACTIVE.add(JOINTS);
-        for(var it=CACHED.values().iterator();it.hasNext();){var b=it.next();if(frame-b.seen>20){b.gpu.close();it.remove();}}
+        for(var it=CACHED.values().iterator();it.hasNext();){var b=it.next();if(now-b.seenAt>3_000_000_000L){b.gpu.close();it.remove();}}
     }
     static void draw(RenderLevelStageEvent e){for(var b:ACTIVE)if(b.gpu.visible(e)){b.gpu.update(b.mesh,0,false,false);b.gpu.draw(e);}}
 }
