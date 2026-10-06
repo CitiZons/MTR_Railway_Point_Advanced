@@ -1,0 +1,93 @@
+# MTR Railway Point Advanced
+
+[English](README.en.md) | [简体中文](README.zh-CN.md)
+
+本项目是 [MTR](https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway) 的道岔外观扩展，当前版本 **0.1.6**。根据实际轨道曲线、坡度和倾角生成基本轨、尖轨、翼轨、护轨、岔心、轮缘槽、连杆、扣件及岔枕。自带默认模型和材质，也可使用轨道资源包。
+
+## 安装
+
+需要 Minecraft **1.20.1**、Forge **47.4.18**、MTR Forge **4.0.3**。
+
+将 `mtr_railway_point_advanced-0.1.6.jar` 放入客户端和服务器的 `mods` 文件夹；两端使用相同构建，不要同时安装多个版本。网络协议为 `3`。`point-runtime-probe` 是开发探针，不用于正式游戏。
+
+配套资源包为 **Citizons Railway 0.1.2**，启用后提供有砟、无砟有枕、无砟无枕及连续护轨样式。Mod 和资源包的版本号独立。
+
+## 使用
+
+1. 按 MTR 原有方式铺轨。道岔分支使用同一节点，固定平交使用同平面相交轨道。
+2. 客户端自动识别附近交汇并生成外观，无需额外方块或节点标记。
+3. 按 **P** 打开 64 格内的岔区选择图，选中道岔后按 Enter 进入蓝图。
+4. 调整轨型、几何参数或单根岔枕，点击“保存外观”。数据独立存储于 `mtrpoint_appearance`，并同步至其他客户端。
+5. “试动尖轨”只用于预览；“实时”恢复跟随运行状态。退出界面会撤销未保存的预览。
+
+## 当前功能
+
+- 同节点 Y 形、曲线和三开道岔，以及固定菱形交叉、平交和交叉渡线组合。
+- 闭合尖轨贴合基本轨轨头，削薄段下部采用不对称 L 形截面，逐渐恢复完整工字形。
+- 三开采用两组相邻进路尖轨联动；中间进路保留翼轨，省略冗余护轨。V 形岔心使用普通道岔的完整截面。
+- 三种道床共用扣件布局；活动尖轨处普通扣件实际重叠时使用滑床，护轨共座替换该位置的普通扣件。有枕承接块随扣件座定位。
+- V 岔心尖端仅省略内部扣件，外部护轨侧夹具、支架和底座保留；枕木、承接块及道床保留。
+- 基本轨、尖轨固定尾端、翼轨、连续护轨和道砟的匹配接头补齐不超过 6 mm 的微缝，保留轮缘槽与真实间隙。
+- 尖轨及可动岔心按 MTR、BRsignal 的只读运行状态显示视觉动画。
+
+## 资源包适配
+
+读取当前启用资源栈中的材质和模型，支持 MTR 原生轨型、OBJ/MTL、普通 Blockbench 立方体模型和带 `modelGroups` 的轨型描述。描述文件位于 `assets/<namespace>/rail_profiles/<name>.json`，可声明截面、模型分组、材质、UV、LOD、连续支承及护轨端头。方向后缀会规范化处理，无需资源包白名单。
+
+最小截面描述：
+
+```json
+{
+  "style": "my_custom_rail",
+  "track": true,
+  "gauge": 1.435,
+  "top": 0.26428,
+  "headWidth": 0.068,
+  "footWidth": 0.14,
+  "railHeight": 0.165,
+  "steelTexture": "my_pack:textures/steel.png",
+  "sleeperTexture": "my_pack:textures/concrete.png"
+}
+```
+
+复杂网格或包含桥梁、隧道的混合模型需要明确的轨型描述，或在蓝图中手动选择样式。Citizons Railway 0.1.2 的共享 OBJ 索引减少资源解析的重复记录；Mod 仍将各面转换为 `Mesh.Quad`，不会因此减少运行时面数。
+
+## 精度与渲染
+
+在“模组 → MTR Railway Point Advanced → 配置”调整客户端外观设置：
+
+| 配置 | 默认 | 作用 |
+|---|---|---|
+| 界面缩放 | 100% | 蓝图和选择界面，范围 50%–125%。 |
+| 近／中、中／远分界 | 4 m / 12 m | 控制高、中、低精度切换。 |
+| 道岔动画距离 | 24 m | 超过此距离冻结视觉动画；设为 0 时全部冻结。 |
+| 道岔接管距离 | 64 m | 超过此距离保留 MTR 原生渲染；设为 0 时禁用接管。 |
+
+距离滑块范围为 0–256 m，配置文件允许 0–4096 m。保存后应用于客户端，不修改服务器行车逻辑。
+
+世界模型使用实体裁剪渲染路径，支持 Iris／Oculus，并读取 Optional Rail 的倾斜采样。静态与活动部件分别缓存，按材质、LOD 和空间批处理；未变化的网格不逐帧重建，接缝补面随源网格变化更新。实际帧率取决于资源包、光影和视距。
+
+## 限制
+
+- 只修改外观，不修改 MTR 连接、寻路、限速、列车位置或 BRsignal 授权和信号逻辑；动画不控制放行。
+- 固定平交不新增转线连接或冲突保护。复式交分、梯线等需要专用开关拓扑的布局尚未实现。
+- 普通及三开道岔检测到折返、分支高差或完全分离后的再交叉时保留 MTR 原生绘制。过密布局触发检测预算时本轮不接管；不能保证识别所有异形道岔。
+- Optional Rail 采样失败时使用 MTR 原生几何。
+
+## 构建
+
+需要 JDK 17，MTR 编译依赖为 `../MTR_BRsignal_addon/libs/MTR-forge-4.0.3+1.20.1.jar`。
+
+```powershell
+.\gradlew.bat build --offline --no-daemon --console=plain
+```
+
+构建产物为 `build/libs/mtr_railway_point_advanced-0.1.6.jar`。
+
+## 文档与许可
+
+- [版本更新记录 / Version changelog](./CHANGELOG.md)：各版本相对前一版的变化 / Changes from the preceding version.
+- [MIT License](./LICENSE)：源码许可 / Source licence。
+- [第三方文件来源 / Third-party notices](./THIRD_PARTY_NOTICES.md)。
+
+本项目主要由 ChatGPT 实现。
