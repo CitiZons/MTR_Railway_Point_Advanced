@@ -12,6 +12,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
 import org.joml.Matrix4f;
 import org.mtrpoint.geometry.*;
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import java.util.*;
 
 /** Persistent GPU geometry: stationary turnouts submit draw calls, not every vertex. */
@@ -24,7 +25,7 @@ final class PointGpu implements AutoCloseable {
     private final List<Batch> orderedFixed=new ArrayList<>(),orderedMoving=new ArrayList<>();
     private final List<Integer> staticIds=new ArrayList<>(),movingIds=new ArrayList<>();
     private Mesh source;private double frame;private long lightTick=-100;private V3 origin;private AABB bounds;
-    private final Map<Long,Integer> bakedLight=new HashMap<>();
+    private final Long2IntOpenHashMap bakedLight=new Long2IntOpenHashMap();
     static long uploads,draws,vertices;
     static long submittedFaces;
     static final long[] lodDraws=new long[3];
@@ -51,7 +52,7 @@ final class PointGpu implements AutoCloseable {
         }
         // Block light updates are infrequent; sky brightness itself is applied by the lightmap.
         boolean light=false;
-        if(tick-lightTick>=20){for(var entry:bakedLight.entrySet()){int value=LevelRenderer.getLightColor(mc.level,BlockPos.of(entry.getKey()));if(value!=entry.getValue()){entry.setValue(value);light=true;}}lightTick=tick;}
+        if(tick-lightTick>=20){for(var entry:bakedLight.long2IntEntrySet()){int value=LevelRenderer.getLightColor(mc.level,BlockPos.of(entry.getLongKey()));if(value!=entry.getIntValue()){entry.setValue(value);light=true;}}lightTick=tick;}
         if(changed||light){upload(fixed,staticIds);resort(fixed,orderedFixed);}
         if(changed||light||frame!=position){upload(moving,movingIds);resort(moving,orderedMoving);}
         if(changed)lightTick=tick-(Math.abs(System.identityHashCode(this))%20);frame=position;
@@ -68,15 +69,16 @@ final class PointGpu implements AutoCloseable {
                 V3 ab=q.b().sub(q.a()),ac=q.c().sub(q.a());
                 V3 n=new V3(ab.y()*ac.z()-ab.z()*ac.y(),ab.z()*ac.x()-ab.x()*ac.z(),ab.x()*ac.y()-ab.y()*ac.x()).unit();
                 V3 center=q.center();long key=BlockPos.containing(center.x(),center.y()+.3,center.z()).asLong();
-                int light=lights.computeIfAbsent(key,k->LevelRenderer.getLightColor(mc.level,BlockPos.of(k)));
+                int light=lights.get(key);if(!lights.containsKey(key)){light=LevelRenderer.getLightColor(mc.level,BlockPos.of(key));lights.put(key,light);}
                 for(int i=0;i<4;i++){
                     V3 v=switch(i){case 0->q.a();case 1->q.b();case 2->q.c();default->q.d();};
                     float u=q.uv()==null?(i==0||i==3?s.u0():s.u1()):q.uv().get(i*2),vv=q.uv()==null?(i<2?s.v0():s.v1()):q.uv().get(i*2+1);
                     // The resource pack intentionally places the bed top on the block
                     // plane. Lift only support faces by a tiny epsilon to win the depth
                     // test against the coplanar world surface and prevent z-fighting.
-                    double depthBias=q.part().equals("track_bed")||q.part().equals("sleeper")||q.part().equals("direct_bearer")?0.00015:0;
-                    b.vertex(v.x()-origin.x(),v.y()-origin.y()+depthBias,v.z()-origin.z()).color(s.color()).uv(u,vv).overlayCoords(OverlayTexture.NO_OVERLAY).uv2(light).normal((float)n.x(),(float)n.y(),(float)n.z()).endVertex();vertices++;
+                    double depthBias=q.part().equals("track_bed")||q.part().equals("track_bed_joint")||q.part().equals("sleeper")||q.part().equals("direct_bearer")?0.00015:0;
+                    V3 vertexNormal=q.normals()==null?n:q.normals().get(i);
+                    b.vertex(v.x()-origin.x(),v.y()-origin.y()+depthBias,v.z()-origin.z()).color(s.color()).uv(u,vv).overlayCoords(OverlayTexture.NO_OVERLAY).uv2(light).normal((float)vertexNormal.x(),(float)vertexNormal.y(),(float)vertexNormal.z()).endVertex();vertices++;
                 }
             }
             VertexBuffer gpu=new VertexBuffer(VertexBuffer.Usage.STATIC);gpu.bind();gpu.upload(b.end());VertexBuffer.unbind();
@@ -99,7 +101,7 @@ final class PointGpu implements AutoCloseable {
         RenderType activeType=null;org.joml.Vector3f previous0=null,previous1=null;ShaderInstance shader=null;
         try{
             for(var b:batches){
-                if(b.lod>=0){double x=b.center.x()-camera.x,y=b.center.y()-camera.y,z=b.center.z()-camera.z;if(distances.level(x*x+y*y+z*z)!=b.lod)continue;}
+                if(b.lod>=0&&RailLod.fittingLevel(b.center)!=b.lod)continue;
                 if(activeType!=b.type){
                     if(activeType!=null){if(previous0!=null)RenderSystem.setShaderLights(previous0,previous1);activeType.clearRenderState();}
                     activeType=b.type;activeType.setupRenderState();shader=RenderSystem.getShader();RenderSystem.setupShaderLights(shader);

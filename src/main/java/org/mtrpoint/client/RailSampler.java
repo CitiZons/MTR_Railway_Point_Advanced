@@ -7,9 +7,9 @@ import java.util.*;
 
 public final class RailSampler {
     private record Bank(double start,double end,Object frame) {}
-    private record Sample(Track track,List<Bank> banks,Rail rail,Object nodeA,Object nodeB) {}
+    private record Sample(Track track,List<Bank> banks,Rail rail,Object math,Object nodeA,Object nodeB) {}
     private static final Map<String,Sample> SAMPLES=new HashMap<>();
-    private record ModelFrames(Sample sample,Track line,List<RailSweep> frames,Map<Cell,RailSweep> cells) {}
+    private record ModelFrames(Sample sample,Track line,List<RailSweep> frames,Map<Cell,RailSweep> cells,List<Cell> callbacks) {}
     private record ModelKey(String railId,String style) {}
     private static final Map<ModelKey,ModelFrames> MODEL_FRAMES=new HashMap<>();
     private static java.lang.reflect.Field frameField;
@@ -53,7 +53,7 @@ public final class RailSampler {
         Object na=null,nb=null;
         try{initialize();if(nodeMethod!=null&&!optionalAdapterBroken){na=nodeMethod.invoke(null,net.minecraft.core.BlockPos.asLong((int)p[0].getX(),(int)p[0].getY(),(int)p[0].getZ()));nb=nodeMethod.invoke(null,net.minecraft.core.BlockPos.asLong((int)p[1].getX(),(int)p[1].getY(),(int)p[1].getZ()));}}catch(ReflectiveOperationException ex){warnOptionalFailure(ex);}
         Sample cached=SAMPLES.get(rail.getHexId());
-        if(cached!=null&&cached.rail==rail&&Objects.equals(cached.nodeA,na)&&Objects.equals(cached.nodeB,nb))return cached.track;
+        if(cached!=null&&cached.rail==rail&&cached.math==rail.railMath&&Objects.equals(cached.nodeA,na)&&Objects.equals(cached.nodeB,nb))return cached.track;
         sampleBuilds++;
         var start=rail.railMath.getPosition(0,false);
         if(Math.hypot(p[0].getX()+.5-start.x,p[0].getZ()+.5-start.z)>Math.hypot(p[1].getX()+.5-start.x,p[1].getZ()+.5-start.z)){Position t=p[0];p[0]=p[1];p[1]=t;}
@@ -62,7 +62,7 @@ public final class RailSampler {
         boolean optional=net.minecraftforge.fml.ModList.get().isLoaded("mtr_optional_rail_addon");
         if(optional&&!optionalAdapterBroken)try{renderMethod.invoke(null,rail,callback,.4,0F,0F);}catch(ReflectiveOperationException ex){warnOptionalFailure(ex);rail.railMath.render(callback,.4,0,0);}
         else rail.railMath.render(callback,.4,0,0);
-        if(points.size()<2)return null;Track track=new Track(rail.getHexId(),node(p[0]),node(p[1]),points);SAMPLES.put(track.id,new Sample(track,List.copyOf(banks),rail,na,nb));return track;
+        if(points.size()<2)return null;Track track=new Track(rail.getHexId(),node(p[0]),node(p[1]),points);SAMPLES.put(track.id,new Sample(track,List.copyOf(banks),rail,rail.railMath,na,nb));return track;
     }
     /** Match the actual MTR/Optional Rail repeat cells, including reversed branch orientation. */
     public static PointMesh.YBoundary yBoundary(Junction j,PointSettings settings){
@@ -185,6 +185,7 @@ public final class RailSampler {
         return transformed;
     }
     private static ModelFrames modelFrames(String railId,String style){
+        style=Profiles.canonical(style);
         Sample sample=SAMPLES.get(railId);if(sample==null)return null;
         ModelKey key=new ModelKey(railId,style);ModelFrames cached=MODEL_FRAMES.get(key);if(cached!=null&&cached.sample==sample)return cached;
         org.mtr.mod.resource.RailResource[] resource={null};org.mtr.mod.client.CustomResourceLoader.getRailById(style,r->resource[0]=r);if(resource[0]==null)return null;
@@ -214,7 +215,13 @@ public final class RailSampler {
             frames.set(i,new RailSweep(points.get(i),points.get(i+1),ta,tb,ca,cb));
             cellFrames.put(rawCells.get(i),frames.get(i));
         }
-        var result=new ModelFrames(sample,new Track(railId,"a","b",points),List.copyOf(frames),Map.copyOf(cellFrames));MODEL_FRAMES.put(key,result);return result;
+        var result=new ModelFrames(sample,new Track(railId,"a","b",points),List.copyOf(frames),Map.copyOf(cellFrames),List.copyOf(rawCells));MODEL_FRAMES.put(key,result);return result;
+    }
+    /** Full callback order, before camera filtering; shares the swept-cell cache. */
+    static List<Cell> ordinaryCells(Rail rail,org.mtr.mod.resource.RailResource resource){
+        if(sample(rail)==null)return List.of();
+        var frames=modelFrames(rail.getHexId(),resource.getId());
+        return frames==null?List.of():frames.callbacks;
     }
     private static V3 modelPoint(V3 p,List<ModelFrames> frames){
         ModelFrames nearest=null;double station=0,best=Double.MAX_VALUE;
@@ -236,6 +243,6 @@ public final class RailSampler {
         if(s==null)return p;
         for(Bank bank:s.banks)if(distance>=bank.start-1e-6&&distance<=bank.end+1e-6)try{var v=(org.mtr.core.tool.Vector)bankMethod.invoke(bank.frame,p.x(),p.y(),p.z());return new V3(v.x,v.y,v.z);}catch(ReflectiveOperationException ex){return p;}return p;
     }
-    public static void retain(Set<String> ids){SAMPLES.keySet().retainAll(ids);MODEL_FRAMES.entrySet().removeIf(e->!ids.contains(e.getValue().sample.track.id));SleeperSeams.retain(ids);}
+    public static void retain(Set<String> detectorIds){Set<String> ids=OrdinaryRailCache.sampleIds(detectorIds);SAMPLES.keySet().retainAll(ids);MODEL_FRAMES.entrySet().removeIf(e->!ids.contains(e.getValue().sample.track.id));SleeperSeams.retain(ids);}
     public static String node(Position p){return p.getX()+","+p.getY()+","+p.getZ();}
 }

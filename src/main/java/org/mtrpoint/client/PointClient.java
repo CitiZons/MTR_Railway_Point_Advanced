@@ -358,6 +358,22 @@ public final class PointClient {
     public static boolean suppress(Rail rail,String style,V3 p,double margin){
         return rail!=null&&suppress(BY_RAIL.getOrDefault(rail.getHexId(),List.of()),rail.getHexId(),style,p,margin);
     }
+    private record CellOwner(View view,PointSettings settings,Profile profile,Set<String> styles,ScissorsLayout scissors,
+        PointMesh.YBoundary boundary,PointMesh.DiamondBoundary diamond,List<Track> centreRoads) {}
+    /** Geometry ownership, independent of camera yaw and blade animation. */
+    static Object cellOwners(Rail rail,String style){
+        String canonical=Profiles.canonical(style);
+        return BY_RAIL.getOrDefault(rail.getHexId(),List.of()).stream()
+            .filter(v->v.settings.enabled()&&matchesNativeStyle(v.styles,canonical)&&takeoverVisible(v))
+            .map(v->new CellOwner(v,v.settings,v.profile,v.styles,v.scissors,v.boundary,v.diamond,v.centreRoads)).toList();
+    }
+    /** Cheap renderer-mixin guard used before allocating cell geometry. */
+    public static boolean hasCandidates(Rail rail,String style){
+        if(rail==null)return false;var candidates=BY_RAIL.get(rail.getHexId());if(candidates==null||candidates.isEmpty())return false;
+        style=Profiles.canonical(style);
+        for(View v:candidates)if(v.settings.enabled()&&!v.styles.isEmpty()&&matchesNativeStyle(v.styles,style))return true;
+        return false;
+    }
     /** The native-cell decision for an explicit view set, shared with the renderer mixin so the
      *  rule that hides a native cell and the boundary the mod draws to stay one decision. */
     static boolean suppress(List<View> candidates,String railId,String style,V3 p,double margin){

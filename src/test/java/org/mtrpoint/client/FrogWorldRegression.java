@@ -55,7 +55,7 @@ public final class FrogWorldRegression {
             V3 ab=q.b().sub(q.a()),ac=q.c().sub(q.a());
             V3 cross=new V3(ab.y()*ac.z()-ab.z()*ac.y(),ab.z()*ac.x()-ab.x()*ac.z(),ab.x()*ac.y()-ab.y()*ac.x());
             double length=cross.length()/Math.max(q.a().distance(q.b()),Math.max(q.a().distance(q.c()),q.b().distance(q.c())));
-            if(length>.0060001)throw new AssertionError("Rail joint filled a real rail gap");
+            if(length>.0200001)throw new AssertionError("Rail joint filled a real rail gap");
             V3 point=q.center();
             if(Math.abs(point.y()-p.top())<1e-8&&!ReviewFixRegression.at(original,point.x(),point.z(),point.y()))closed++;
         }
@@ -64,12 +64,12 @@ public final class FrogWorldRegression {
     }
     private static void joints(Profile p){
         V3 normal=new V3(1,0,0);PointSettings s=PointSettings.DEFAULT;
-        for(double gap:new double[]{.002,.04}){
+        for(double gap:new double[]{.002,.0199,.0201,.04}){
             Mesh steel=new Mesh();
             steel.rail(new V3(0,0,-1),V3.ZERO,normal,normal,1,1,p,s,"rail");
             steel.rail(new V3(0,0,gap),new V3(0,0,1),normal,normal,1,1,p,s,"wing");
             Mesh bridges=RailJoints.bridges(steel);
-            if(gap<.006){
+            if(gap<=.02){
                 if(bridges.quads.isEmpty()||!ReviewFixRegression.at(bridges,0,gap/2,p.top()))throw new AssertionError("Final rail-head hairline remains open");
             }else if(!bridges.quads.isEmpty())throw new AssertionError("Real flange clearance was filled");
         }

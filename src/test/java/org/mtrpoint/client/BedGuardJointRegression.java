@@ -9,16 +9,16 @@ import java.util.*;
 public final class BedGuardJointRegression {
     public static void run(Path assets,ObjTemplate.Reader reader)throws Exception{
         int probes=0;
-        for(String style:List.of("mainline","center_guard","outer_guard")){
+        for(String style:List.of("mainline","center_guard","outer_guard","slab","direct")){
             JsonObject base=JsonParser.parseString(Files.readString(assets.resolve("citizons_railway/rail_profiles/citizons_"+style+"_1435.json"))).getAsJsonObject();
             for(String lod:List.of("near","mid","far")){
                 JsonObject spec=base.deepCopy();String model=base.getAsJsonObject("lod").getAsJsonObject(lod).get("model").getAsString();spec.addProperty("model",model);
                 ProfileModel loaded=ProfileModel.read(spec,model,"",true,reader);
-                probes+=check(loaded.attachments(),"ballast",style+"/"+lod);
+                probes+=check(loaded.attachments(),style.equals("slab")||style.equals("direct")?"track_bed":"ballast",style+"/"+lod);
                 if(loaded.continuousGuard()!=null)probes+=check(loaded.continuousGuard().rails(),"rail_native_guard",style+"/"+lod);
             }
         }
-        System.out.println("BED_GUARD_JOINTS: PASS actual ballast top/shoulder/bottom and inner/outer guard cells, three LODs; narrow seam probes="+probes+"; 40 mm gaps retained");
+        System.out.println("BED_GUARD_JOINTS: PASS actual ballast, slab/direct concrete beds and inner/outer guard cells, three LODs; narrow seam probes="+probes+"; 40 mm gaps retained");
     }
     private static Mesh cells(List<Mesh.Quad> faces,double gap){
         double lo=faces.stream().flatMap(q->vertices(q).stream()).mapToDouble(V3::z).min().orElseThrow();
@@ -31,14 +31,14 @@ public final class BedGuardJointRegression {
     private static List<V3> vertices(Mesh.Quad q){return List.of(q.a(),q.b(),q.c(),q.d());}
     private static int check(List<Mesh.Quad> faces,String part,String label){
         faces=faces.stream().filter(q->q.part().equals(part)).toList();
-        Mesh source=cells(faces,.002),joined=RailJoints.bridges(source,true);
+        Mesh source=cells(faces,.019),joined=RailJoints.bridges(source,true);
         int probes=0;
         for(var q:source.quads)if(q.part().equals(part)){
             var vs=vertices(q);
             for(int i=0;i<4;i++){
                 V3 a=vs.get(i),b=vs.get((i+1)%4);
                 if(Math.abs(a.z())>1e-8||Math.abs(b.z())>1e-8||a.distance(b)<1e-7)continue;
-                V3 probe=a.lerp(b,.5).add(0,0,.001);
+                V3 probe=a.lerp(b,.5).add(0,0,.0095);
                 if(joined.quads.stream().noneMatch(face->hit(face.a(),face.b(),face.c(),probe)))throw new AssertionError(label+" "+part+" seam remains open at "+probe);
                 probes++;
             }

@@ -2,15 +2,15 @@
 
 [English](README.en.md) | [简体中文](README.zh-CN.md)
 
-本项目是 [MTR](https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway) 的道岔外观扩展，当前版本 **0.1.6**。根据实际轨道曲线、坡度和倾角生成基本轨、尖轨、翼轨、护轨、岔心、轮缘槽、连杆、扣件及岔枕。自带默认模型和材质，也可使用轨道资源包。
+本项目是 [MTR](https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway) 的道岔外观扩展，当前版本 **0.1.7**。根据实际轨道曲线、坡度和倾角生成基本轨、尖轨、翼轨、护轨、岔心、轮缘槽、连杆、扣件及岔枕。自带默认模型和材质，也可使用轨道资源包。
 
 ## 安装
 
 需要 Minecraft **1.20.1**、Forge **47.4.18**、MTR Forge **4.0.3**。
 
-将 `mtr_railway_point_advanced-0.1.6.jar` 放入客户端和服务器的 `mods` 文件夹；两端使用相同构建，不要同时安装多个版本。网络协议为 `3`。`point-runtime-probe` 是开发探针，不用于正式游戏。
+将 `mtr_railway_point_advanced-0.1.7.jar` 放入客户端和服务器的 `mods` 文件夹；两端使用相同构建，不要同时安装多个版本。网络协议为 `3`。`point-runtime-probe` 是开发探针，不用于正式游戏。
 
-配套资源包为 **Citizons Railway 0.1.2**，启用后提供有砟、无砟有枕、无砟无枕及连续护轨样式。Mod 和资源包的版本号独立。
+配套资源包为 **Citizons Railway 0.1.3**，启用后提供有砟、无砟有枕、无砟无枕及连续护轨样式。Mod 和资源包的版本号独立。
 
 ## 使用
 
@@ -27,7 +27,7 @@
 - 三开采用两组相邻进路尖轨联动；中间进路保留翼轨，省略冗余护轨。V 形岔心使用普通道岔的完整截面。
 - 三种道床共用扣件布局；活动尖轨处普通扣件实际重叠时使用滑床，护轨共座替换该位置的普通扣件。有枕承接块随扣件座定位。
 - V 岔心尖端仅省略内部扣件，外部护轨侧夹具、支架和底座保留；枕木、承接块及道床保留。
-- 基本轨、尖轨固定尾端、翼轨、连续护轨和道砟的匹配接头补齐不超过 6 mm 的微缝，保留轮缘槽与真实间隙。
+- 匹配的接头补齐不超过 2 cm 的缝隙。仅连接匹配的开放边界，保留轮缘槽与钢轨截面开口。
 - 尖轨及可动岔心按 MTR、BRsignal 的只读运行状态显示视觉动画。
 
 ## 资源包适配
@@ -50,7 +50,7 @@
 }
 ```
 
-复杂网格或包含桥梁、隧道的混合模型需要明确的轨型描述，或在蓝图中手动选择样式。Citizons Railway 0.1.2 的共享 OBJ 索引减少资源解析的重复记录；Mod 仍将各面转换为 `Mesh.Quad`，不会因此减少运行时面数。
+复杂网格或包含桥梁、隧道的混合模型需要明确的轨型描述，或在蓝图中手动选择样式。
 
 ## 精度与渲染
 
@@ -65,7 +65,11 @@
 
 距离滑块范围为 0–256 m，配置文件允许 0–4096 m。保存后应用于客户端，不修改服务器行车逻辑。
 
-世界模型使用实体裁剪渲染路径，支持 Iris／Oculus，并读取 Optional Rail 的倾斜采样。静态与活动部件分别缓存，按材质、LOD 和空间批处理；未变化的网格不逐帧重建，接缝补面随源网格变化更新。实际帧率取决于资源包、光影和视距。
+道岔接管距离只控制道岔外观替换。禁用接管后，普通资源包轨道仍使用各档精度和渲染缓存。
+
+普通轨道按完整的 8 m 区块缓存，包含轨枕和扣件。转动视角只改变可见性，不重建未变化的区块几何。精度按区块选择，并在距离分界附近保留小幅切换余量，减少反复切换；精度、轨道、样式或道岔接管范围变化时更新几何。支承部件保留 OBJ 法线，以维持平滑光照。
+
+世界模型使用实体裁剪渲染路径，支持 Iris／Oculus，并读取 Optional Rail 的倾斜采样。静态与活动部件分别缓存，接缝补面随源网格变化更新。实际帧率仍取决于模型复杂度、光影和视距。
 
 ## 限制
 
@@ -82,12 +86,12 @@
 .\gradlew.bat build --offline --no-daemon --console=plain
 ```
 
-构建产物为 `build/libs/mtr_railway_point_advanced-0.1.6.jar`。
+构建产物为 `build/libs/mtr_railway_point_advanced-0.1.7.jar`。
 
 ## 文档与许可
 
-- [版本更新记录 / Version changelog](./CHANGELOG.md)：各版本相对前一版的变化 / Changes from the preceding version.
-- [MIT License](./LICENSE)：源码许可 / Source licence。
-- [第三方文件来源 / Third-party notices](./THIRD_PARTY_NOTICES.md)。
+- [版本更新记录](CHANGELOG.md)
+- [MIT 许可](LICENSE)
+- [第三方文件来源](THIRD_PARTY_NOTICES.md)
 
 本项目主要由 ChatGPT 实现。

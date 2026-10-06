@@ -11,7 +11,9 @@ public record ProfileModel(ModelDetail detail,List<Mesh.Quad> attachments,List<M
     public static ProfileModel read(JsonObject descriptor,String activeModel,String texture,boolean flip,ObjTemplate.Reader reader)throws IOException{
         if(descriptor.has("model")&&!descriptor.get("model").getAsString().equals(activeModel))throw new IllegalArgumentException("Descriptor model differs from active style");
         ObjTemplate obj=ObjTemplate.read(activeModel,texture,flip,reader);JsonObject roles=descriptor.getAsJsonObject("modelGroups");
-        var rails=obj.select(names(roles,"rail"));var bearers=obj.select(names(roles,"sleeper"));var fittings=obj.select(names(roles,"fastener"));
+        // Swept steel derives normals from the curved world faces. Only rigid supports
+        // need the OBJ smoothing normals, which may differ between LOD exports.
+        var rails=obj.select(names(roles,"rail")).stream().map(q->new Mesh.Quad(q.a(),q.b(),q.c(),q.d(),q.surface(),q.part(),q.index(),q.uv())).toList();var bearers=obj.select(names(roles,"sleeper"));var fittings=obj.select(names(roles,"fastener"));
         var attachments=obj.select(names(roles,"preserve"));var supportNames=names(roles,"supports");var supports=obj.select(supportNames);
         ContinuousGuard guard=null;var guardNames=new ArrayList<String>();var guardSupportNames=new ArrayList<String>();
         if(descriptor.has("continuousGuard")){

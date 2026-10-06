@@ -164,7 +164,7 @@ public final class PointRenderer {
         double zMin=model==null?-resource.getRepeatInterval()/2:model.detail().zMin(),zMax=model==null?resource.getRepeatInterval()/2:model.detail().zMax();
         RailCellCache.submit(faces,RailSampler.sweep(rail,resource,a,b),flip,resource.getModelYOffset(),zMin,zMax,shift,swept);
     }
-    public static void beginFrame(){RailCellCache.begin();}
+    public static void beginFrame(){RailCellCache.begin();OrdinaryRailCache.begin();}
     public static void render(){
         var mc=net.minecraft.client.Minecraft.getInstance();if(mc.level==null||mc.player==null){clear();return;}
         if(mc.screen instanceof BlueprintScreen||mc.screen instanceof PointSelectionScreen){RailCellCache.discard();return;}
@@ -178,6 +178,7 @@ public final class PointRenderer {
             for(int i=0;i<sources.size();i++)for(var q:sources.get(i).quads)
                 if(RailJoints.steel(q.part())&&(i<ASSEMBLIES.size()||!PointGpu.hiddenInView(q)))jointSteel.quad(q);
         }
+        OrdinaryRailCache.submit();
         RailCellCache.finish(jointSteel);
     }
     public static void drawGpu(net.minecraftforge.client.event.RenderLevelStageEvent e){

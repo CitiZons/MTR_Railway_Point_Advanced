@@ -60,13 +60,14 @@ final class ContinuousGuards {
         RailCellCache.submitGuard(guard.supports(),sweep,flip,resource.getModelYOffset(),model.detail().zMin(),model.detail().zMax(),move,inset,model.detail().railCenter(),guard.guardCenter(),guard.sharedSupports());
     }
 
-    static void endpoint(Rail rail,RailResource resource,boolean flip,V3 a,V3 b,ProfileModel model,Track track,Ends ends){
+    static void endpoint(Rail rail,RailResource resource,boolean flip,V3 a,V3 b,ProfileModel model,Track track,Ends ends){endpoint(rail,resource,flip,a,b,model,track,ends,true,true);}
+    static void endpoint(Rail rail,RailResource resource,boolean flip,V3 a,V3 b,ProfileModel model,Track track,Ends ends,boolean startOwner,boolean endOwner){
         var guard=model.continuousGuard();if(guard==null)return;double station=track.nearest(a.lerp(b,.5));String key=rail.getHexId()+"/"+resource.getId();double interval=resource.getRepeatInterval();
         double startReach=reach(track,guard.length(),ends,true);
-        if(ends.start&&claimTerminal(key+"/start",station,startReach,interval)){for(var slice:RailSampler.endpointSlices(resource,track,true,startReach)){
+        if(startOwner&&ends.start&&claimTerminal(key+"/start",station,startReach,interval)){for(var slice:RailSampler.endpointSlices(resource,track,true,startReach)){
             double from=guard.length()*slice.from()/startReach,to=guard.length()*slice.to()/startReach;RailCellCache.submit(clip(guard.endpoint(),from,to),slice.sweep(),false,resource.getModelYOffset(),from,to,V3.ZERO,true);}}
         double endReach=reach(track,guard.length(),ends,false);
-        if(ends.end&&claimTerminal(key+"/end",track.length-station,endReach,interval)){for(var slice:RailSampler.endpointSlices(resource,track,false,endReach)){
+        if(endOwner&&ends.end&&claimTerminal(key+"/end",track.length-station,endReach,interval)){for(var slice:RailSampler.endpointSlices(resource,track,false,endReach)){
             double from=guard.length()*slice.from()/endReach,to=guard.length()*slice.to()/endReach;RailCellCache.submit(clip(guard.endpoint(),from,to),slice.sweep(),false,resource.getModelYOffset(),from,to,V3.ZERO,true);}}
     }
 }

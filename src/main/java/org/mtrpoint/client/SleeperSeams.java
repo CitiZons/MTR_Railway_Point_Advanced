@@ -8,16 +8,16 @@ import java.util.*;
 /** Cached endpoint adjustment for styles that explicitly separate fixed and support groups. */
 public final class SleeperSeams {
     private record Key(V3 a,V3 b) {}
-    private record PlanKey(String railId,String style) {}
     private record Plan(Rail rail,Track sampled,Map<Key,V3> moves) {}
-    private static final Map<PlanKey,Plan> PLANS=new HashMap<>();
-    private static final Map<PlanKey,Plan> FRAME_PLANS=new HashMap<>();
+    private static final Map<String,Plan> PLANS=new HashMap<>();
+    private static final Map<String,Plan> FRAME_PLANS=new HashMap<>();
     public static void begin(){FRAME_PLANS.clear();ContinuousGuards.begin();}
     public static void clear(){PLANS.clear();FRAME_PLANS.clear();ContinuousGuards.clear();}
     public static void retain(Set<String> ids){PLANS.entrySet().removeIf(e->!ids.contains(e.getValue().rail.getHexId()));}
-    public static boolean render(Rail rail,RailResource resource,boolean flip,V3 a,V3 b){
+    public static boolean render(Rail rail,RailResource resource,boolean flip,V3 a,V3 b){return render(rail,resource,flip,a,b,true);}
+    static boolean render(Rail rail,RailResource resource,boolean flip,V3 a,V3 b,boolean endpoint){
         if(rail==null)return false;ProfileModel model=Profiles.model(resource.getId());if(model==null||!model.alignSleepers()&&model.continuousGuard()==null)return false;
-        PlanKey key=new PlanKey(rail.getHexId(),resource.getId());Plan plan=FRAME_PLANS.get(key);
+        String key=rail.getHexId()+"/"+resource.getId();Plan plan=FRAME_PLANS.get(key);
         if(plan==null){Track sampled=RailSampler.sample(rail);if(sampled==null)return false;plan=PLANS.get(key);
             if(plan==null||plan.rail!=rail||plan.sampled!=sampled){plan=build(rail,resource,sampled);PLANS.put(key,plan);}FRAME_PLANS.put(key,plan);}
         Key cell=new Key(a,b);boolean planned=plan.moves.containsKey(cell);if(!planned&&model.continuousGuard()==null)return false;
@@ -34,7 +34,7 @@ public final class SleeperSeams {
             if(guard!=null)ContinuousGuards.supports(rail,resource,flip,a,b,model,track,ends,layoutMove);
         }
         else if(guard!=null&&!planned){PointRenderer.cell(rail,resource,flip,a,b,model.supports(),V3.ZERO,false);ContinuousGuards.supports(rail,resource,flip,a,b,model,track,ends,V3.ZERO);}
-        if(guard!=null)ContinuousGuards.endpoint(rail,resource,flip,a,b,model,track,ends);
+        if(guard!=null&&endpoint)ContinuousGuards.endpoint(rail,resource,flip,a,b,model,track,ends);
         return true;
     }
     private static Plan build(Rail rail,RailResource resource,Track sampled){

@@ -2,23 +2,20 @@ package org.mtrpoint.geometry;
 
 import java.util.*;
 
-/** Fill only the narrow open seam between otherwise adjoining rail or ballast faces. */
+/** Fill only the narrow open seam between otherwise adjoining rail, ballast or concrete bed faces. */
 public final class RailJoints {
-    private static final double LIMIT=.05;
+    private static final double LIMIT=.02;
     private static final Set<String> STEEL=Set.of("rail","frog","wing","guard");
     public static boolean nativeSteel(String part){return part.startsWith("rail_")&&!part.equals("rail_joint")&&!part.endsWith("_end");}
     public static boolean steel(String part){return STEEL.contains(part)||part.equals("blade_heel")||nativeSteel(part);}
-    public static boolean seamSurface(String part){return steel(part)||part.equals("ballast");}
+    public static boolean seamSurface(String part){return steel(part)||part.equals("ballast")||part.equals("track_bed");}
     private record Key(long x,long y,long z) implements Comparable<Key>{
         static Key of(V3 v){return new Key(Math.round(v.x()*1e7),Math.round(v.y()*1e7),Math.round(v.z()*1e7));}
         public int compareTo(Key k){int c=Long.compare(x,k.x);if(c==0)c=Long.compare(y,k.y);return c==0?Long.compare(z,k.z):c;}
     }
     private record EdgeKey(Key a,Key b){static EdgeKey of(V3 a,V3 b){Key x=Key.of(a),y=Key.of(b);return x.compareTo(y)<0?new EdgeKey(x,y):new EdgeKey(y,x);}}
     private record Edge(V3 a,V3 b,V3 normal,Mesh.Quad face,int corner){V3 center(){return a.lerp(b,.5);}}
-    // Keep a practical 5 cm spatial grid while the actual seam tolerance remains
-    // LIMIT. The neighbouring-bin search preserves matches across cell borders.
-    private static final double GRID=.05;
-    private record Cell(long x,long y,long z){static Cell of(V3 v){return new Cell((long)Math.floor(v.x()/GRID),(long)Math.floor(v.y()/GRID),(long)Math.floor(v.z()/GRID));}}
+    private record Cell(long x,long y,long z){static Cell of(V3 v){return new Cell((long)Math.floor(v.x()/.25),(long)Math.floor(v.y()/.25),(long)Math.floor(v.z()/.25));}}
     private record Pair(Edge a,Edge b,boolean reverse,double gap){}
     private static V3 cross(V3 a,V3 b){return new V3(a.y()*b.z()-a.z()*b.y(),a.z()*b.x()-a.x()*b.z(),a.x()*b.y()-a.y()*b.x());}
     public static Mesh bridges(Mesh steel){
@@ -39,8 +36,11 @@ public final class RailJoints {
             Edge edge=owners.get(0);Cell cell=Cell.of(edge.center());
             for(int x=-1;x<=1;x++)for(int y=-1;y<=1;y++)for(int z=-1;z<=1;z++)for(Edge other:bins.getOrDefault(new Cell(cell.x+x,cell.y+y,cell.z+z),List.of())){
                 if(edge.face==other.face||edge.normal.dot(other.normal)<.995||!edge.face.surface().texture().equals(other.face.surface().texture()))continue;
-                if(edge.face.part().equals("ballast")!=other.face.part().equals("ballast"))continue;
-                if(nativeOnly&&!nativeSteel(edge.face.part())&&!nativeSteel(other.face.part())&&!edge.face.part().equals("ballast"))continue;
+                // Corresponding section edges have the same length; nearby web notches do not.
+                if(Math.abs(edge.a.distance(edge.b)-other.a.distance(other.b))>1e-4)continue;
+                if(edge.face.part().equals("ballast")!=other.face.part().equals("ballast")
+                    ||edge.face.part().equals("track_bed")!=other.face.part().equals("track_bed"))continue;
+                if(nativeOnly&&!nativeSteel(edge.face.part())&&!nativeSteel(other.face.part())&&!edge.face.part().equals("ballast")&&!edge.face.part().equals("track_bed"))continue;
                 double same=Math.max(edge.a.distance(other.a),edge.b.distance(other.b)),reverse=Math.max(edge.a.distance(other.b),edge.b.distance(other.a));
                 double gap=Math.min(same,reverse);if(gap>LIMIT||gap<1e-7)continue;
                 V3 axis=cross(edge.b.sub(edge.a).unit(),edge.normal),middle=edge.center().lerp(other.center(),.5);
@@ -74,7 +74,7 @@ public final class RailJoints {
                 V3 normal=cross(points.get(i1).sub(points.get(i0)),points.get(i2).sub(points.get(i0)));
                 if(normal.length()<1e-12)continue;
                 if(normal.dot(a.normal)<0){int swap=i1;i1=i2;i2=swap;}
-                out.quad(new Mesh.Quad(points.get(i0),points.get(i1),points.get(i2),points.get(i2),a.face.surface(),a.face.part().equals("ballast")?"ballast_joint":"rail_joint",-1,
+                out.quad(new Mesh.Quad(points.get(i0),points.get(i1),points.get(i2),points.get(i2),a.face.surface(),a.face.part().equals("ballast")?"ballast_joint":a.face.part().equals("track_bed")?"track_bed_joint":"rail_joint",-1,
                     List.of(mapped.get(i0*2),mapped.get(i0*2+1),mapped.get(i1*2),mapped.get(i1*2+1),mapped.get(i2*2),mapped.get(i2*2+1),mapped.get(i2*2),mapped.get(i2*2+1))));
             }
             used.add(a);used.add(b);

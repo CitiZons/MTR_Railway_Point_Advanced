@@ -1,4 +1,24 @@
-# 更新记录
+# 更新记录 / Changelog
+
+## 0.1.7 — 2026-10-06
+
+相对 0.1.6：
+
+- 普通资源包轨道按完整的 8 m 区块缓存；视角转动不再改变区块内容，避免反复变换、重建和上传未变化的轨道网格。
+- 将普通轨枕、扣件等支承部件纳入共享世界网格缓存，减少逐单元的变换、光照查询及渲染提交；保留 OBJ 法线和平滑光照。
+- 精度按区块选择，并加入约 10% 的切换余量；方向后缀轨型使用同一套精度模型，避免局部回退到高精度。
+- 缓存随轨道、资源、精度及道岔接管范围变化更新，离开范围后释放区块贡献；普通轨道采样不再因道岔检测距离较短而反复失效。
+- 匹配接缝的最大间隙改为 2 cm，修复无砟有枕、无砟无枕的混凝土道床接缝；区分道床与钢轨边界，保留轮缘槽和工字形截面开口。
+- 更新中英文安装、配置和渲染说明。网络协议保持 3，配套 Citizons Railway 版本为 0.1.3。
+
+Changes from 0.1.6:
+
+- Cache ordinary resource-pack rails as complete 8 m chunks, avoiding geometry transforms, mesh rebuilds and uploads caused solely by camera rotation.
+- Include ordinary sleepers, fittings and other supports in shared world-mesh caches, reducing per-cell transforms, lighting queries and render submissions while retaining OBJ normals and smooth shading.
+- Select LOD per chunk with approximately 10% hysteresis. Directional style variants share the registered LOD models instead of falling back to high detail.
+- Refresh caches when tracks, resources, LOD or turnout ownership change; release out-of-range chunk contributions and retain ordinary-rail sampling independently of turnout detection distance.
+- Bridge matching gaps up to 2 cm and fix concrete-bed seams in both slab styles. Keep bed and steel boundaries separate and preserve flangeways and I-section openings.
+- Update English and Chinese installation, configuration and rendering documentation. Network protocol remains 3; the companion Citizons Railway pack is 0.1.3.
 
 ## 0.1.6 — 2026-10-05
 

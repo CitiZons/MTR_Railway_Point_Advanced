@@ -1,6 +1,18 @@
 # 验证记录
 
-## 0.1.6 当前实现（2026-10-05）
+## 0.1.7（2026-10-06）
+
+发布配套资源包为 Citizons Railway 0.1.3。资源包再生成、几何检查、ZIP 与解压目录一致性检查通过；本次补充配套版本说明，不修改 Mod 代码或已验证的 JAR。
+
+升版前的完整 `regression build --offline` 已通过，日志为 `build-stable-rail-cache-final.log`。用户在 alpha.4 客户端测试后反馈效果很好；未采集可用于量化对比的 FPS 或内存数据。
+
+- `OrdinaryRailCacheRegression` 覆盖完整区块分组、200 帧稳定缓存复用、精度及接管变化、轨道移除与返回、方向后缀、样式和方向修改、支承法线，以及普通轨道在道岔检测范围外的采样保留。
+- 无砟有枕、无砟无枕的三个精度档均覆盖 19 mm 混凝土接缝；40 mm 真实间隙保留。既有钢轨截面、轮缘槽、道岔与三开几何回归继续通过。
+- 0.1.7 发布构建 `gradlew.bat build --offline --no-daemon --console=plain` 通过（`build-release-017.log`），包含完整几何回归及 `reobfJar`。产物为 `build/libs/mtr_railway_point_advanced-0.1.7.jar`；JAR 元数据为 0.1.7，包含新的普通轨道缓存类，不含回归测试类。
+
+历史章节仅代表对应版本的验证，不替代当前结果。
+
+## 0.1.6 历史验证（2026-10-05）
 
 发布构建：`gradlew.bat build --offline --no-daemon` 通过，包含几何回归、`reobfJar` 和 `reobfSmokeJar`。日志为 `build-release-016.log`，耗时 3 分 45 秒；本次构建涵盖当前几何、动画／接管距离配置和缓存改动。
 
