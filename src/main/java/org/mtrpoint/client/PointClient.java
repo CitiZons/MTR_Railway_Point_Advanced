@@ -14,6 +14,9 @@ public final class PointClient {
         public final Junction junction;public PointSettings settings;public Profile profile;public Set<String> styles;public double position,target,previewPosition=Double.NaN;public Mesh mesh;public String state="mtrpoint.idle";private double lastPosition=-1;private PointSettings lastSettings;
         public View(Junction j,PointSettings s,Profile p,Set<String> styles){junction=j;settings=s;profile=p;this.styles=Set.copyOf(styles);}
         private Mesh left,middle,right,jointSteel;private int[] moving;private double lastFrame=-1;
+        private final GeometryJobs.Slot<PreparedFrames> preparedFrames=new GeometryJobs.Slot<>();
+        private FrameKey preparedKey;
+        private java.util.function.Supplier<PreparedFrames> preparedBuild;
         public long builds;public ScissorsLayout scissors;public ScissorsLayout shared;
         /** The native repeat cell window of a plain crossing, on both sides of it. */
         public PointMesh.DiamondBoundary diamond;
@@ -56,6 +59,10 @@ public final class PointClient {
             return result;
         }
         public Mesh mesh(){
+            var mc=Minecraft.getInstance();
+            if(left==null&&mc!=null&&mc.level!=null&&!(mc.screen instanceof BlueprintScreen)&&!(mc.screen instanceof PointSelectionScreen)){
+                if(!prepareAsync())return mesh==null?(mesh=new Mesh()):mesh;
+            }
             double visual=Double.isFinite(previewPosition)?previewPosition:position;
             if(!animationVisible())visual=lastPosition>=0?lastPosition:0;
             if(left==null||lastSettings!=settings){
@@ -84,6 +91,29 @@ public final class PointClient {
                 lastFrame=visual;lastPosition=visual;
             }return mesh;
         }
+        /** Runtime preparation never waits for frame geometry; the editor and headless probes keep the sync path. */
+        public boolean prepareAsync(){
+            if(left!=null&&lastSettings==settings)return true;
+            if(!PointPreparation.admit(this))return false;
+            PointMesh.YBoundary boundary=claimed(this)!=null?claimed(this):scissors!=null&&junction.kind()==Junction.Kind.Y?scissors.boundary(junction,settings):RailSampler.yBoundary(junction,settings);
+            List<Track> centreSnapshot=centreRoads==null?null:List.copyOf(centreRoads),channelSnapshot=List.copyOf(channels);
+            List<Track> cutRoads=new ArrayList<>();if(scissors==null&&shared!=null)cutRoads.addAll(shared.tracks());if(centreSnapshot==null)cutRoads.addAll(channelSnapshot);
+            List<Track> bankRoads=scissors==null?junction.tracks():scissors.tracks();
+            FrameKey key=new FrameKey(settings,profile,scissors,shared,boundary,diamond,centreSnapshot,channelSnapshot,centreHidden,List.copyOf(cutRoads),List.copyOf(bankRoads));
+            if(!key.equals(preparedKey)){
+                preparedFrames.clear();preparedKey=key;var copies=new GeometryCopies();
+                var j=copies.junction(junction);var sc=copies.scissors(scissors);var sharedSnapshot=copies.scissors(shared);
+                var ctr=centreSnapshot==null?null:copies.tracks(centreSnapshot);var ch=copies.tracks(channelSnapshot);var cutters=copies.tracks(cutRoads);var bankRoadCopies=copies.tracks(bankRoads);
+                var s=settings;var p=profile;var d=diamond;var hidden=centreHidden;
+                var bankSnapshot=RailSampler.bankSnapshot(bankRoadCopies,p.source());
+                var timing=PointPreparation.started(this);
+                preparedBuild=()->timing.build(()->buildPreparedFrames(j,s,p,sc,sharedSnapshot,boundary,d,ctr,ch,hidden,cutters,bankSnapshot));
+            }
+            PreparedFrames result=preparedFrames.getBackground(preparedBuild);
+            if(result==null)return false;
+            left=result.left;middle=result.middle;right=result.right;moving=result.moving.clone();mesh=new Mesh();mesh.quads.addAll(left.quads);jointSteel=null;lastSettings=settings;lastFrame=-1;
+            preparedFrames.clear();preparedKey=null;preparedBuild=null;builds++;PointPreparation.framesReady(this);return true;
+        }
         public double renderedPosition(){return lastPosition;}
         private boolean animationVisible(){return PointConfig.animationDistance()>0&&withinDistance(junction.center(),PointConfig.animationDistance());}
         /** Static seam input, including only blade edges identical in every throw. */
@@ -104,7 +134,50 @@ public final class PointClient {
             }
             return jointSteel;
         }
-        public void preview(PointSettings s){if(settings.equals(s)&&left!=null)return;settings=s;profile=profileFor(junction,s);styles=stylesFor(junction,s);left=null;mesh=null;refreshScissors();}
+        private void discardAsync(){preparedFrames.clear();preparedKey=null;preparedBuild=null;}
+        public void preview(PointSettings s){if(settings.equals(s)&&left!=null)return;settings=s;profile=profileFor(junction,s);styles=stylesFor(junction,s);preparedFrames.clear();preparedKey=null;preparedBuild=null;left=null;mesh=null;refreshScissors();}
+    }
+    private record FrameKey(PointSettings settings,Profile profile,ScissorsLayout scissors,ScissorsLayout shared,PointMesh.YBoundary boundary,
+        PointMesh.DiamondBoundary diamond,List<Track> centre,List<Track> channels,boolean centreHidden,List<Track> cutters,List<Track> bankRoads){}
+    private record PreparedFrames(Mesh left,Mesh middle,Mesh right,int[] moving){}
+    static final class GeometryCopies {
+        private final IdentityHashMap<Track,Track> tracks=new IdentityHashMap<>();
+        Track track(Track source){return source==null?null:tracks.computeIfAbsent(source,t->new Track(t.id,t.startNode,t.endNode,t.points));}
+        List<Track> tracks(List<Track> source){if(source==null)return null;return source.stream().map(this::track).toList();}
+        Junction junction(Junction source){return source==null?null:new Junction(source.id(),source.kind(),track(source.a()),track(source.b()),source.center(),source.sa(),source.sb(),source.extent(),track(source.third()));}
+        ScissorsLayout scissors(ScissorsLayout source){
+            if(source==null)return null;var cross=junction(source.crossing());var turnouts=source.turnouts().stream().map(this::junction).toList();
+            return new ScissorsLayout(cross,turnouts,tracks(source.through()),tracks(source.tracks()),source.axis(),source.lo(),source.hi());
+        }
+    }
+    private static PreparedFrames buildPreparedFrames(Junction junction,PointSettings settings,Profile profile,ScissorsLayout scissors,
+        ScissorsLayout shared,PointMesh.YBoundary boundary,PointMesh.DiamondBoundary diamond,List<Track> centreRoads,List<Track> channels,
+        boolean centreHidden,List<Track> cutters,java.util.function.UnaryOperator<Mesh> bank){
+        var reuse=new Mesh.FrameReuse();
+        java.util.function.DoubleFunction<Mesh> buildAt=position->{
+            if(centreHidden)return new Mesh();
+            Mesh result=centreRoads!=null?PointMesh.centre(junction,centreRoads,diamond,channels,settings,profile,position)
+                :scissors!=null&&junction.kind()==Junction.Kind.DIAMOND?scissors.centerMesh(settings,profile)
+                :junction.kind()==Junction.Kind.DIAMOND?PointMesh.build(junction,settings,profile,position,diamond)
+                :PointMesh.build(junction,settings,profile,position,boundary,reuse);
+            if(scissors!=null&&junction.kind()!=Junction.Kind.DIAMOND)result=scissors.clip(result,junction);
+            return result;
+        };
+        Mesh left=buildAt.apply(0),middle=junction.kind()==Junction.Kind.THREE?buildAt.apply(.5):null,right=junction.kind()!=Junction.Kind.DIAMOND?buildAt.apply(1):left;
+        var frames=middle==null?List.of(left,right):List.of(left,middle,right);
+        frames=DiamondGeometry.cutChannelFrames(frames,cutters,profile.tune(settings),settings);
+        frames=bankFrames(frames,bank);
+        left=frames.get(0);right=frames.get(frames.size()-1);if(middle!=null)middle=frames.get(1);
+        if(left.quads.size()!=right.quads.size()||middle!=null&&middle.quads.size()!=left.quads.size())throw new IllegalStateException("Animation topology changed for "+junction.id()+" "+junction.kind());
+        var indices=new ArrayList<Integer>();for(int i=0;i<left.quads.size();i++)if(!left.quads.get(i).equals(right.quads.get(i))||middle!=null&&!left.quads.get(i).equals(middle.quads.get(i)))indices.add(i);else if(right!=left)right.quads.set(i,left.quads.get(i));
+        return new PreparedFrames(left,middle,right,indices.stream().mapToInt(Integer::intValue).toArray());
+    }
+    /** Shared raw/static faces are banked once across all poses, with stable face ordering. */
+    static List<Mesh> bankFrames(List<Mesh> frames,java.util.function.UnaryOperator<Mesh> bank){
+        var ids=new IdentityHashMap<Mesh.Quad,Integer>();Mesh unique=new Mesh();
+        for(Mesh frame:frames)for(var q:frame.quads)if(!ids.containsKey(q)){ids.put(q,unique.quads.size());unique.quads.add(q);}
+        Mesh transformed=bank.apply(unique);if(transformed.quads.size()!=unique.quads.size())throw new IllegalStateException("Banking changed frame topology");
+        var result=new ArrayList<Mesh>();for(Mesh frame:frames){Mesh output=new Mesh();for(var q:frame.quads)output.quads.add(transformed.quads.get(ids.get(q)));result.add(output);}return result;
     }
     public static List<View> views=List.of();
     private static final Map<String,AppearanceData.Entry> SETTINGS=new HashMap<>();
@@ -114,6 +187,7 @@ public final class PointClient {
     private static List<ScissorsLayout> groups=List.of();
     private static Map<String,List<PointNetwork.Movement>> movements=Map.of();
     private static PointNetwork.Motion motion;private static long motionReceived;
+    private static final IncrementalDetector DETECTOR=new IncrementalDetector();
     private static int ticks;private static Object level;private static long signature;private static boolean refreshProfiles;
     private static double lastRebuildX=Double.NaN,lastRebuildZ=Double.NaN;
     private static final IdentityHashMap<View,Boolean> TAKEOVER_CACHE=new IdentityHashMap<>();
@@ -121,7 +195,7 @@ public final class PointClient {
     private static double takeoverCameraX=Double.NaN,takeoverCameraY=Double.NaN,takeoverCameraZ=Double.NaN,takeoverCachedDistance=-1;
     private static int serverFeatures;private static int serverModelFormat=-1;private static boolean handshakeComplete;
     public static String message="";
-    public static void clear(){views=List.of();SETTINGS.clear();motion=null;signature=0;lastRebuildX=lastRebuildZ=Double.NaN;serverFeatures=0;serverModelFormat=-1;handshakeComplete=false;Profiles.clear();RailSampler.clear();BY_RAIL.clear();groupJunctions=List.of();groupsById=Map.of();movements=Map.of();TAKEOVER_CACHE.clear();takeoverCachedDistance=-1;PointRenderer.clear();}
+    public static void clear(){PointPreparation.clear();GeometryJobs.clear();DETECTOR.clear();views=List.of();SETTINGS.clear();motion=null;signature=0;lastRebuildX=lastRebuildZ=Double.NaN;serverFeatures=0;serverModelFormat=-1;handshakeComplete=false;Profiles.clear();RailSampler.clear();BY_RAIL.clear();groupJunctions=List.of();groupsById=Map.of();movements=Map.of();TAKEOVER_CACHE.clear();takeoverCachedDistance=-1;PointRenderer.clear();}
     public static void handshake(PointNetwork.Handshake m){
         serverFeatures=m.features();serverModelFormat=m.modelFormat();
         handshakeComplete=m.protocol()==PointNetwork.PROTOCOL_VERSION&&serverModelFormat>=0&&serverModelFormat<=PointNetwork.MODEL_FORMAT_VERSION;
@@ -154,31 +228,43 @@ public final class PointClient {
     public static void invalidate(){signature=0;lastRebuildX=lastRebuildZ=Double.NaN;refreshProfiles=true;Profiles.clear();}
     public static void rebuild(){
         var mc=Minecraft.getInstance();if(mc.player==null)return;
-        if(Double.isFinite(lastRebuildX)&&!refreshProfiles){double dx=mc.player.getX()-lastRebuildX,dz=mc.player.getZ()-lastRebuildZ;if(dx*dx+dz*dz<16)return;}
         lastRebuildX=mc.player.getX();lastRebuildZ=mc.player.getZ();
-        // Keep the detector window tied to the takeover distance. A fixed 96 m window made
-        // distant point views remain in the detector and geometry caches even when native MTR
-        // rendering had already taken over, which made the distance sliders ineffective for CPU.
-        double scan=Math.max(16,Math.min(96,PointConfig.takeoverDistance()+16));
-        List<Rail> rails=MinecraftClientData.getInstance().railIdMap.values().stream().filter(r->r.getTransportMode()==TransportMode.TRAIN&&r.railMath.getLength()>1).filter(r->{var m=r.railMath;return mc.player.getX()>=m.minX-scan&&mc.player.getX()<=m.maxX+scan&&mc.player.getZ()>=m.minZ-scan&&mc.player.getZ()<=m.maxZ+scan;}).sorted(Comparator.comparing(Rail::getHexId)).toList();
+        // Keep discovery tied to takeover distance while retaining already known junctions as
+        // long as their source rails stay loaded; walking changes visibility, not membership.
+        double scan=Math.max(16,Math.min(256,PointPreparation.cpuDistance()+16));
+        var loadedRails=MinecraftClientData.getInstance().railIdMap;
+        var candidates=new HashMap<String,Rail>();
+        loadedRails.values().stream().filter(r->r.getTransportMode()==TransportMode.TRAIN&&r.railMath.getLength()>1).filter(r->{var m=r.railMath;return mc.player.getX()>=m.minX-scan&&mc.player.getX()<=m.maxX+scan&&mc.player.getZ()>=m.minZ-scan&&mc.player.getZ()<=m.maxZ+scan;}).forEach(r->candidates.put(r.getHexId(),r));
+        // Keep previously discovered junctions while their source rails remain loaded. The scan
+        // still admits nearby new rails, but walking away alone no longer drops known geometry.
+        for(View view:views)if(mc.level.hasChunk((int)Math.floor(view.junction.center().x()/16),(int)Math.floor(view.junction.center().z()/16)))for(Track track:view.junction.tracks()){
+            Rail rail=loadedRails.get(track.id);if(rail!=null&&rail.getTransportMode()==TransportMode.TRAIN&&rail.railMath.getLength()>1)candidates.putIfAbsent(rail.getHexId(),rail);
+        }
+        List<Rail> rails=candidates.values().stream().sorted(Comparator.comparing(Rail::getHexId)).toList();
         // Check identities and Optional Rail settings; unchanged tracks reuse their samples.
         var tracks=new ArrayList<Track>();long sig=1;
         for(Rail r:rails){Track t=RailSampler.sample(r);if(t==null)continue;tracks.add(t);sig=31*sig+System.identityHashCode(t);sig=31*sig+r.getStyles().hashCode();}
         if(sig==signature)return;signature=sig;
         Map<String,View> previous=new HashMap<>();views.forEach(v->previous.put(v.junction.id(),v));var next=new ArrayList<View>();
-        var junctions=Detector.find(tracks);
+        var junctions=DETECTOR.find(tracks);
         var known=ScissorsLayout.find(junctions.stream().filter(j->saved(j.id()).enabled()).toList());
         for(Junction j:junctions){
             // An interior crossing a shared centre already draws in full must not build a second,
             // un-notched copy of the same rails inside the shared flangeways.
             if(ScissorsLayout.absorbedByCentre(known,j))continue;
             PointSettings s=saved(j.id());View old=previous.get(j.id());
-            if(old!=null&&!refreshProfiles&&old.junction.equals(j)&&old.settings.equals(s)&&old.styles.equals(stylesFor(j,s))&&old.profile==profileFor(j,s)){next.add(old);continue;}
+            if(old!=null&&!refreshProfiles&&old.junction.equals(j)&&sameTrackInstances(old.junction,j)&&old.settings.equals(s)&&old.styles.equals(stylesFor(j,s))&&old.profile==profileFor(j,s)){next.add(old);continue;}
             var v=new View(j,s,profileFor(j,s),stylesFor(j,s));if(old!=null){v.position=old.position;v.target=old.target;}
             if(mc.screen instanceof BlueprintScreen editor&&editor.pointId().equals(j.id())){View existing=previous.get(j.id());if(existing!=null){if(refreshProfiles){existing.left=null;existing.preview(existing.settings);}next.add(existing);continue;}}next.add(v);
         }
         RailSampler.retain(tracks.stream().map(t->t.id).collect(java.util.stream.Collectors.toSet()));
-        refreshProfiles=false;views=List.copyOf(next);refreshScissors();
+        var retained=Collections.newSetFromMap(new IdentityHashMap<View,Boolean>());retained.addAll(next);for(View old:views)if(!retained.contains(old))old.discardAsync();
+        refreshProfiles=false;views=List.copyOf(next);PointPreparation.retain(views);refreshScissors();
+    }
+    private static boolean sameTrackInstances(Junction a,Junction b){
+        var tracks=new HashMap<String,Track>();for(Track track:a.tracks())tracks.put(track.id,track);
+        for(Track track:b.tracks())if(tracks.get(track.id)!=track)return false;
+        return tracks.size()==b.tracks().size();
     }
     private static void refreshScissors(){
         var junctions=views.stream().filter(v->v.settings.enabled()).map(v->v.junction).toList();
@@ -196,6 +282,7 @@ public final class PointClient {
         }
         refreshCrossings(views);
         buildByRail(views);
+        PointRenderer.refreshComponents();
     }
     /** MTR's own cells are hidden per rail, so the index is built from every road a view answers
      *  for - the steel it draws and the channels that cut it - not from its junction alone. */
@@ -337,6 +424,10 @@ public final class PointClient {
     public static V3 editCenter(View v){return v.junction.kind()!=Junction.Kind.DIAMOND?v.junction.a().at(Math.min(5,PointMesh.extent(v.junction,v.settings)/2)).lerp(v.junction.b().at(Math.min(5,PointMesh.extent(v.junction,v.settings)/2)),.5):v.junction.center();}
     public static View nearest(V3 p){return views.stream().filter(v->v.junction.center().distance(p)<64).min(Comparator.comparingDouble(v->editCenter(v).distance(p))).orElse(null);}
     public static boolean takeoverVisible(View v){
+        return PointRenderer.componentVisible(v);
+    }
+    /** Centre-only distance check used by the stable component visibility gate. */
+    static boolean centerTakeoverVisible(View v){
         if(v==null)return false;double distance=PointConfig.takeoverDistance();if(distance<=0)return false;
         var mc=Minecraft.getInstance();if(mc==null||mc.level==null||mc.gameRenderer==null)return true;
         var camera=mc.gameRenderer.getMainCamera().getPosition();
@@ -367,6 +458,10 @@ public final class PointClient {
             .filter(v->v.settings.enabled()&&matchesNativeStyle(v.styles,canonical)&&takeoverVisible(v))
             .map(v->new CellOwner(v,v.settings,v.profile,v.styles,v.scissors,v.boundary,v.diamond,v.centreRoads)).toList();
     }
+    static Object localCellOwners(Object ownership,Rail rail,String style,List<OrdinaryRailCache.IndexedCell> cells){
+        @SuppressWarnings("unchecked") var owners=(List<CellOwner>)ownership;
+        return owners.stream().filter(owner->cells.stream().anyMatch(c->suppress(List.of(owner.view),rail.getHexId(),style,c.cell().a().lerp(c.cell().b(),.5),0))).toList();
+    }
     /** Cheap renderer-mixin guard used before allocating cell geometry. */
     public static boolean hasCandidates(Rail rail,String style){
         if(rail==null)return false;var candidates=BY_RAIL.get(rail.getHexId());if(candidates==null||candidates.isEmpty())return false;
@@ -395,11 +490,18 @@ public final class PointClient {
             if(inWindow(j,v,railId,p,margin))return true;
         }return false;
     }
+    /** Geometry ownership without readiness/distance, used to snapshot the exact native fallback cells. */
+    static boolean ownsCell(View v,String railId,V3 p){
+        Junction j=v.junction;if(v.scissors!=null)return v.scissors.owns(j,railId,p);
+        if(j.kind()==Junction.Kind.DIAMOND){var roads=v.centreRoads!=null?v.centreRoads:j.tracks();
+            if(v.diamond!=null)for(int index=0;index<roads.size();index++)if(roads.get(index).id.equals(railId)){double[] window=v.diamond.window(index);double d=roads.get(index).nearest(p);if(d>=Math.min(window[0],window[1])&&d<=Math.max(window[0],window[1]))return true;}return false;}
+        return inWindow(j,v,railId,p,0);
+    }
     /** MTR's flat rail callback reports the legacy `default` id even when the active
      * renderer/profile is represented by default_3d (or its siding variant). Treat the
      * three built-in names as one native hand-off family so a generated turnout never
      * leaves a default-material cell visible beside its replacement mesh. */
-    private static boolean matchesNativeStyle(Set<String> styles,String style){
+    static boolean matchesNativeStyle(Set<String> styles,String style){
         if(styles.contains(style))return true;
         if(!NATIVE_STYLE_FAMILY.contains(style))return false;
         return styles.contains("default")||styles.contains("default_3d")||styles.contains("default_3d_siding");

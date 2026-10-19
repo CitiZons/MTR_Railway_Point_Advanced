@@ -13,9 +13,11 @@ public final class RailLod {
     private static RailDetailDistances distances;
     private record Levels(ProfileModel[] models) {}
     private record ChunkKey(String id,int x,int y,int z) {}
-    private static final Map<String,Levels> LEVELS=new HashMap<>();
-    private static final Map<ChunkKey,Integer> CHUNK_LEVELS=new HashMap<>();
     private static final int MAX_CHUNK_LEVELS=8192;
+    private static final Map<String,Levels> LEVELS=new HashMap<>();
+    private static final Map<ChunkKey,Integer> CHUNK_LEVELS=new LinkedHashMap<>(256,.75F,true){
+        @Override protected boolean removeEldestEntry(Map.Entry<ChunkKey,Integer> eldest){return size()>MAX_CHUNK_LEVELS;}
+    };
     public static final long[] draws=new long[3];
     public static void clear(){LEVELS.clear();CHUNK_LEVELS.clear();OrdinaryRailCache.clear();Arrays.fill(draws,0);}
     public static ProfileModel register(String id,RailResource source,ProfileModel high,JsonObject descriptor,ObjTemplate.Reader reader)throws Exception{
@@ -57,7 +59,6 @@ public final class RailLod {
         if(previous==0&&d<nearOut)next=0;
         else if(previous==2&&d>farIn)next=2;
         else if(previous==1&&d>=nearIn&&d<=farOut)next=1;
-        if(CHUNK_LEVELS.size()>=MAX_CHUNK_LEVELS&&!CHUNK_LEVELS.containsKey(key))CHUNK_LEVELS.clear();
         CHUNK_LEVELS.put(key,next);return next;
     }
     static ProfileModel[] registeredModels(String id){var levels=LEVELS.get(Profiles.canonical(id));return levels==null?null:levels.models;}

@@ -9,8 +9,16 @@ public final class Regression {
     public static List<Track> y(){var a=new ArrayList<V3>();var b=new ArrayList<V3>();for(int i=0;i<=120;i++){double z=i*.25,x=.008*z*z;a.add(new V3(-x,0,z));b.add(new V3(x,0,z));}return List.of(new Track("a","0,0,0","-7,0,30",a),new Track("b","0,0,0","7,0,30",b),line("in","0,0,-20","0,0,0",new V3(0,0,-20),new V3(0,0,0)));}
     private static void require(boolean pass,String why){if(!pass)throw new AssertionError(why);}
     public static void main(String[] args)throws Exception{
+        org.mtrpoint.client.GeometryJobsRegression.run();
+        org.mtrpoint.client.AsyncViewRegression.run();
+        FrameReuseRegression.run();
+        org.mtrpoint.client.PointPreparationRegression.run();
+        org.mtrpoint.client.PointTakeoverStageRegression.run();
+        org.mtrpoint.geometry.IncrementalDetectorRegression.run();
+        org.mtrpoint.client.PointGpuStaticRegression.run();
         org.mtrpoint.client.RenderCacheRegression.run();
         org.mtrpoint.client.OrdinaryRailCacheRegression.run();
+        org.mtrpoint.client.GuardTerminalCacheRegression.run();
         ThreeWaySafetyRegression.run();
         ThreeWayShapeRegression.run();
         org.mtrpoint.client.FrogWorldRegression.run();

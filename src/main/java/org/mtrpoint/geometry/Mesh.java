@@ -5,11 +5,35 @@ import java.util.*;
 public final class Mesh {
     /** Diagnostics used by the saved-layout smoke probe; reset by the probe before rebuilding. */
     public static long CAP_CALLS, CAP_LOOPS, CAP_FACES, CAP_EDGE_CANDIDATES, CAP_EDGE_UNIQUE, CAP_OUTLINE_POINTS;
-    private static final java.util.Map<Profile.Surface,List<Float>> CENTER_UV_CACHE=new java.util.HashMap<>();
+    private static final java.util.Map<Profile.Surface,List<Float>> CENTER_UV_CACHE=new java.util.concurrent.ConcurrentHashMap<>();
     public record Quad(V3 a,V3 b,V3 c,V3 d,Profile.Surface surface,String part,int index,java.util.List<Float> uv,java.util.List<V3> normals) {
         public Quad(V3 a,V3 b,V3 c,V3 d,Profile.Surface surface,String part,int index,java.util.List<Float> uv){this(a,b,c,d,surface,part,index,uv,null);}
         public Quad(V3 a,V3 b,V3 c,V3 d,Profile.Surface surface,String part,int index){this(a,b,c,d,surface,part,index,null);}
         public V3 center(){return a.add(b).add(c).add(d).mul(.25);}
+    }
+    /** Raw-frame layout that lets later animation poses regenerate only moving quads. */
+    public static final class FrameReuse {
+        private record Slot(Quad fixed) { boolean moving(){return fixed==null;} }
+        private List<Slot> slots;
+        private int movingCount;
+        public boolean captured(){return slots!=null;}
+        public void capture(Mesh raw,List<Quad> movingFaces){
+            if(captured())throw new IllegalStateException("Frame reuse was already captured");
+            var counts=new IdentityHashMap<Quad,Integer>();for(Quad q:movingFaces)counts.merge(q,1,Integer::sum);
+            var layout=new ArrayList<Slot>(raw.quads.size());int matched=0;
+            for(Quad q:raw.quads){Integer count=counts.get(q);if(count!=null&&count>0){layout.add(new Slot(null));counts.put(q,count-1);matched++;}else layout.add(new Slot(q));}
+            if(matched!=movingFaces.size())throw new IllegalArgumentException("Moving raw faces are not all present in the reference frame");
+            slots=List.copyOf(layout);movingCount=matched;
+        }
+        /** Compose a dynamic-only raw mesh into the original full-quad order. */
+        public Mesh compose(Mesh moving){
+            if(!captured())throw new IllegalStateException("Frame reuse has no reference frame");
+            if(moving.quads.size()!=movingCount)throw new IllegalArgumentException("Moving raw topology changed: expected "+movingCount+" faces, got "+moving.quads.size());
+            Mesh result=new Mesh();int next=0;
+            for(Slot slot:slots)result.quads.add(slot.moving()?moving.quads.get(next++):slot.fixed());
+            return result;
+        }
+        public int movingFaceCount(){return movingCount;}
     }
     public final List<Quad> quads=new ArrayList<>();
     /** Texture coordinates a face falls back to: the middle of its surface's atlas square. A face
@@ -45,6 +69,31 @@ public final class Mesh {
     }
     public void blade(V3 a,V3 b,V3 normalA,V3 normalB,double taperA,double taperB,Profile p,PointSettings s,double stockSide){
         sweptRail(a,b,normalA,normalB,taperA,taperB,p,s,"blade",stockSide);
+    }
+    /** Close the exposed toe of a swept switch blade with the actual rail section. The sweep
+     *  intentionally omits transverse faces at every segment so joins stay open; callers add this
+     *  only at the first segment, where the tapered end is a real exposed face. */
+    public void bladeTipCap(V3 center,V3 sectionNormal,double taper,Profile p,PointSettings s,double stockSide){
+        V3 tangent=sectionNormal.lateral().mul(-1);
+        Mesh cap=new Mesh();cap.railCutCap(center,tangent,p,s,"blade",true);
+        if(cap.quads.isEmpty())return;
+        double footWidth=p.detail()==null?p.footWidth():p.detail().rails().stream()
+            .flatMap(q->java.util.stream.Stream.of(q.a(),q.b(),q.c(),q.d()))
+            .mapToDouble(v->Math.abs(v.x()-p.detail().railCenter())*2*p.headWidth()/p.detail().headWidth()).max().orElse(p.footWidth());
+        double top=p.top()+s.verticalOffset(),headBottom=top-.036;
+        double clearance=(footWidth-p.headWidth())/2+.001;
+        for(var q:cap.quads){
+            java.util.function.Function<V3,V3> point=v->{
+                V3 relative=v.sub(center);double across=relative.dot(sectionNormal),height=relative.y();
+                double lower=Math.max(0,Math.min(1,(headBottom-height)/Math.max(.001,p.railHeight()-.036)));
+                double original=across;
+                across*=taper;
+                across-=stockSide*(clearance+(footWidth-p.headWidth())*taper)*(1-taper)*lower;
+                if(original*stockSide<0)across+=original*(1-taper)*lower;
+                return center.add(sectionNormal.mul(across)).add(0,height,0);
+            };
+            quad(new Quad(point.apply(q.a()),point.apply(q.b()),point.apply(q.c()),point.apply(q.d()),q.surface(),"blade",q.index(),q.uv()));
+        }
     }
     private void sweptRail(V3 a,V3 b,V3 normalA,V3 normalB,double taperA,double taperB,Profile p,PointSettings s,String part,double stockSide){
         Mesh section=new Mesh();section.rail(a,b,taperA,taperB,p,s,part);

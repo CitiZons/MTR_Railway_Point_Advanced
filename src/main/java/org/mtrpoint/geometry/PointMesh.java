@@ -49,7 +49,18 @@ public final class PointMesh {
         sleepers(mesh,owner,s,p,extent,YBoundary.nominal(owner,s));SleeperEdits.finish(mesh,owner,s,p);return mesh;
     }
     public static Mesh build(Junction j,PointSettings s,Profile raw,double position,YBoundary boundary) {
-        if(j.kind()==Junction.Kind.THREE)return ThreeWayMesh.build(j,s,raw,position,boundary);
+        return build(j,s,raw,position,boundary,null);
+    }
+    /** Build/reuse animated raw frames while preserving their original quad order. */
+    public static Mesh build(Junction j,PointSettings s,Profile raw,double position,YBoundary boundary,Mesh.FrameReuse reuse) {
+        if(boundary==null)boundary=YBoundary.nominal(j,s);
+        if(j.kind()==Junction.Kind.THREE)return ThreeWayMesh.build(j,s,raw,position,boundary,reuse);
+        if(reuse!=null&&reuse.captured())return reuse.compose(buildDynamic(j,s,raw,position,boundary));
+        var moving=new ArrayList<Mesh.Quad>();Mesh mesh=buildFull(j,s,raw,position,boundary,moving);
+        if(reuse!=null)reuse.capture(mesh,moving);
+        return mesh;
+    }
+    private static Mesh buildFull(Junction j,PointSettings s,Profile raw,double position,YBoundary boundary,List<Mesh.Quad> movingFaces) {
         Mesh mesh=new Mesh();if(!s.enabled())return mesh;Profile p=raw.tune(s);
         double extent=extent(j,s),offset=p.centerOffset();
         if(j.kind()==Junction.Kind.DIAMOND){DiamondGeometry.build(mesh,j,s,p,extent,DiamondBoundary.nominal(j,s));sleepers(mesh,j,s,p,extent,boundary);SleeperEdits.finish(mesh,j,s,p);return mesh;}
@@ -108,7 +119,8 @@ public final class PointMesh {
                     V3 nb=TurnoutFrame.seatedBlade(r.track,stock,e+derivativeStep,r.sign,open,localStart,blade,contact,p,s)
                         .sub(TurnoutFrame.seatedBlade(r.track,stock,e-derivativeStep,r.sign,open,localStart,blade,contact,p,s)).lateral();
                     if(e>=localStart+blade-1e-9)nb=r.track.tangent(e).lateral();
-                    mesh.blade(ba,bb,na,nb,ta,tb,p,s,r.sign);
+                    int firstMoving=mesh.quads.size();mesh.blade(ba,bb,na,nb,ta,tb,p,s,r.sign);appendRange(mesh,firstMoving,movingFaces);
+                    if(d<=localStart&&e>localStart){firstMoving=mesh.quads.size();mesh.bladeTipCap(ba,na,ta,p,s,r.sign);appendRange(mesh,firstMoving,movingFaces);}
                     b=bb;
                 } else {
                     b=running(r,e,offset);
@@ -118,7 +130,9 @@ public final class PointMesh {
             }
         }
         if(j.kind()==Junction.Kind.Y) {
+            int crossingStart=mesh.quads.size();
             crossing.build(mesh,position);
+            if(s.movableFrog())for(int i=crossingStart;i<mesh.quads.size();i++)if(mesh.quads.get(i).part().equals("frog"))movingFaces.add(mesh.quads.get(i));
             // A paired stretcher bar translates with the blades, entirely in the visual mesh.
             double at=bladeStart+Math.min(1,blade/3);V3 origin=j.a().at(at),forward=j.a().tangent(at);
             V3 a=TurnoutFrame.contact(j.a(),at,side,offset,position,bladeStart,blade,s,origin,forward);
@@ -126,13 +140,53 @@ public final class PointMesh {
             // The stretcher sits immediately above the bearer.  Using the rail top here put
             // the bar through the wheel flange; keep a small clearance over the sleeper top.
             double bearerTop=(p.detail()==null?p.top()-p.railHeight():p.top()-p.detail().railTop()+p.detail().bearerTop())+s.verticalOffset();
-            mesh.beam(a,b,.09,.09,bearerTop+.01,bearerTop+.05,p.steel(),"stretcher",-1);
+            int firstMoving=mesh.quads.size();mesh.beam(a,b,.09,.09,bearerTop+.01,bearerTop+.05,p.steel(),"stretcher",-1);appendRange(mesh,firstMoving,movingFaces);
         }
         sleepers(mesh,j,s,p,extent,boundary);
         EndSleepers.finish(mesh,j,s,p,boundary);
         SleeperEdits.finish(mesh,j,s,p);
         if(crossing!=null)FrogFittings.clear(mesh,crossing,p);
         return mesh;
+    }
+    private static void appendRange(Mesh mesh,int start,List<Mesh.Quad> target){if(target!=null)for(int i=start;i<mesh.quads.size();i++)target.add(mesh.quads.get(i));}
+    private static Mesh buildDynamic(Junction j,PointSettings s,Profile raw,double position,YBoundary boundary){
+        Mesh mesh=new Mesh();if(!s.enabled()||j.kind()!=Junction.Kind.Y)return mesh;Profile p=raw.tune(s);
+        double extent=extent(j,s),offset=p.centerOffset();List<Running> runs=List.of(new Running(j.a(),-1,0),new Running(j.a(),1,0),new Running(j.b(),-1,1),new Running(j.b(),1,1));
+        double frog=extent*.65;for(double d=.25;d<=extent;d+=.1)if(j.a().at(d).distance(j.b().at(d))>2*offset){frog=d;break;}
+        frog=Math.max(1,Math.min(extent-1,frog+s.frogShift()));FrogGeometry crossing=new FrogGeometry(j,s,p,extent);frog=(crossing.sa+crossing.sb)/2;
+        double bladeStart=TurnoutFrame.start(j,extent),blade=s.bladeLength()>0?s.bladeLength():Math.max(2,Math.min((frog-bladeStart)*.65,9));
+        double secondStart=j.b().nearest(j.a().at(bladeStart)),contact=TurnoutFrame.contact(blade,p,s),side=TurnoutFrame.side(j,extent);
+        double stockStart=TurnoutFrame.stockStart(j.b(),j.a(),bladeStart),commonEnd=j.a().nearest(j.b().at(stockStart));
+        for(Running r:runs){
+            double start=r.branch==0?boundary.aStart():boundary.bStart(),end=r.branch==0?boundary.aEnd():boundary.bEnd();
+            boolean inner=r.sign==(r.branch==0?side:-side);double localStart=r.branch==0?bladeStart:secondStart;int count=(int)Math.ceil((end-start)/.24);
+            V3 previous=null;boolean previousBlade=false;
+            for(int i=0;i<count;i++){
+                double d=start+(end-start)*i/count,e=start+(end-start)*(i+1)/count;
+                if(r.branch==1&&e<=(inner?localStart:stockStart)){previous=null;continue;}
+                if(r.branch==1&&!inner)d=Math.max(d,stockStart);
+                boolean clippedBoundary=false;
+                if(inner&&crossing!=null){double toe=crossing.toe(r.branch),heel=crossing.heel(r.branch);if(d>=toe&&e<=heel){previous=null;continue;}if(d<toe&&e>toe){e=toe;clippedBoundary=true;}else if(d<heel&&e>heel){d=heel;clippedBoundary=true;}}
+                boolean planed=inner&&e>localStart&&d<localStart+blade;
+                if(r.branch==0&&inner&&!planed&&e<=localStart){if(d>=commonEnd){previous=null;continue;}e=Math.min(e,commonEnd);}
+                if(!planed){previous=null;previousBlade=false;continue;}
+                V3 a=previous!=null&&previousBlade?previous:running(r,d,offset);double ta=TurnoutFrame.taper(d-localStart,contact),tb=TurnoutFrame.taper(e-localStart,contact);
+                Track stock=r.branch==0?j.b():j.a();double open=r.branch==0?position:1-position;
+                V3 ba=TurnoutFrame.seatedBlade(r.track,stock,d,r.sign,open,localStart,blade,contact,p,s),bb=TurnoutFrame.seatedBlade(r.track,stock,e,r.sign,open,localStart,blade,contact,p,s);
+                if(previous!=null)ba=previous;double derivativeStep=.0001;
+                V3 na=TurnoutFrame.seatedBlade(r.track,stock,d+derivativeStep,r.sign,open,localStart,blade,contact,p,s).sub(TurnoutFrame.seatedBlade(r.track,stock,d-derivativeStep,r.sign,open,localStart,blade,contact,p,s)).lateral();
+                V3 nb=TurnoutFrame.seatedBlade(r.track,stock,e+derivativeStep,r.sign,open,localStart,blade,contact,p,s).sub(TurnoutFrame.seatedBlade(r.track,stock,e-derivativeStep,r.sign,open,localStart,blade,contact,p,s)).lateral();
+                if(e>=localStart+blade-1e-9)nb=r.track.tangent(e).lateral();mesh.blade(ba,bb,na,nb,ta,tb,p,s,r.sign);
+                if(d<=localStart&&e>localStart)mesh.bladeTipCap(ba,na,ta,p,s,r.sign);
+                if(clippedBoundary){previous=null;previousBlade=false;}else{previous=bb;previousBlade=true;}
+            }
+        }
+        mesh.quads.addAll(crossing.buildDynamic(position).quads);
+        double at=bladeStart+Math.min(1,blade/3);V3 origin=j.a().at(at),forward=j.a().tangent(at);
+        V3 a=TurnoutFrame.contact(j.a(),at,side,offset,position,bladeStart,blade,s,origin,forward);
+        V3 b=TurnoutFrame.contact(j.b(),j.b().nearest(origin),-side,offset,1-position,secondStart,blade,s,origin,forward);
+        double bearerTop=(p.detail()==null?p.top()-p.railHeight():p.top()-p.detail().railTop()+p.detail().bearerTop())+s.verticalOffset();
+        mesh.beam(a,b,.09,.09,bearerTop+.01,bearerTop+.05,p.steel(),"stretcher",-1);return mesh;
     }
     private static V3 running(Running r,double s,double offset){return r.track.at(s).add(r.track.tangent(s).lateral().mul(r.sign*offset));}
     public static V3 sleeperNormal(Junction j,PointSettings s,double distance,double start,double end){

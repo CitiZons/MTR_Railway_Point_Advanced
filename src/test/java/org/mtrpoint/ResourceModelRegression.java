@@ -95,6 +95,7 @@ final class ResourceModelRegression {
             var detail=ProfileModel.read(descriptor,descriptor.get("model").getAsString(),"",true,reader).detail();
             profiles.add(new Profile(1.435,.26428,.068,.14,.165,Profile.STEEL,Profile.TIMBER,name,true,detail));
         }
+        for(Profile profile:profiles)FrameReuseRegression.profile(profile);
         List<Mesh.Quad> expected=null;
         Track road=new Track("guard-seats","a","b",List.of(V3.ZERO,new V3(0,0,10)));
         for(Profile p:profiles){
@@ -116,6 +117,7 @@ final class ResourceModelRegression {
         for(Profile p:profiles)org.mtrpoint.client.FrogWorldRegression.run(p);
         for(Profile p:profiles)org.mtrpoint.client.NodeJointRegression.run(p);
         for(Profile p:profiles)SwitchBladeRegression.lSection(p,PointSettings.DEFAULT);
+        for(Profile p:profiles)SwitchBladeRegression.toeEndFaces(p,PointSettings.DEFAULT);
         for(int mode=0;mode<=4;mode++){
             Set<Mesh.Quad> reference=null;
             for(Profile p:profiles){

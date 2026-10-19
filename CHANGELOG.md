@@ -1,5 +1,29 @@
 # 更新记录 / Changelog
 
+## 0.1.8 — 2026-10-19
+
+相对 0.1.7：
+
+- 优化人物移动时的渲染表现。道床和接缝按局部区域更新，避免一处变化触发整个可见线路的几何重算和 GPU 上传。
+- 已加载区块中的普通轨道和道岔缓存不再仅因离开视野或接管范围而释放；返回时复用未变化的几何和缓冲，并保留近期使用过的精度版本。
+- 将几何准备移至有界后台队列，限制每帧上传工作，复用未变化的 GPU 批次；轨道变化检测也复用未变化的局部结果，减少移动中的集中重建。
+- 道岔按移动速度和实际准备耗时提前预热，普通轨道优先于道岔准备。单个道岔的完整模型就绪后独立接管，不再等待组合内所有道岔与共享组件全部完成；就绪前保留原生渲染，交接期间保留道床覆盖。
+- 道岔动画姿态复用固定钢轨、支承及倾斜变换结果，只重新生成活动部分，减少首次准备的重复计算与分配。
+- 修复各材质尖轨外露尖端缺少端面材质的问题，保持动画中的完整截面。
+- 为连续中央护轨和外护轨的端部收紧模型提供独立的优先准备路径，避免快速接近端部时等到停下后才显示。
+- 网络协议保持 3，配套 Citizons Railway 版本更新为 0.1.4；不改变线路连接、行车或信号逻辑。
+
+Changes from 0.1.7:
+
+- Improve rendering during player movement. Update beds and joint patches by local region instead of rebuilding and uploading the entire visible line after a local change.
+- Retain ordinary-rail and turnout caches in loaded world chunks when they leave the view or takeover range. Reuse unchanged geometry and buffers on return, including recently used LOD variants.
+- Prepare geometry through a bounded background queue, limit per-frame uploads and reuse unchanged GPU batches. Track-change detection also reuses unchanged local results to reduce bursts of rebuilding during movement.
+- Prewarm turnouts according to movement speed and measured preparation time, with ordinary rails taking priority. Each turnout takes over when its complete local model is ready, without waiting for every turnout and shared component in the group. Keep native rendering until readiness and preserve bed coverage during handoff.
+- Reuse fixed rails, supports and banking results across animation poses, regenerating only moving parts to reduce cold-start computation and allocation.
+- Restore textured end faces on exposed switch tips across materials, retaining the complete section during animation.
+- Prepare continuous centre-guard and outer-guard terminal models independently with priority, so their inward taper appears during fast approaches rather than only after stopping.
+- Keep network protocol 3 and update the companion Citizons Railway version to 0.1.4. Track connections, operations and signalling are unchanged.
+
 ## 0.1.7 — 2026-10-06
 
 相对 0.1.6：

@@ -19,6 +19,15 @@ public final class ThreeWayMesh {
     }
     private record Crossing(int a,int b,FrogGeometry frog,double sign) {}
     public static Mesh build(Junction j,PointSettings s,Profile raw,double position,PointMesh.YBoundary boundary){
+        return build(j,s,raw,position,boundary,null);
+    }
+    public static Mesh build(Junction j,PointSettings s,Profile raw,double position,PointMesh.YBoundary boundary,Mesh.FrameReuse reuse){
+        if(reuse!=null&&reuse.captured())return reuse.compose(buildDynamic(j,s,raw,position,boundary));
+        var moving=new ArrayList<Mesh.Quad>();Mesh mesh=buildFull(j,s,raw,position,boundary,moving);
+        if(reuse!=null)reuse.capture(mesh,moving);
+        return mesh;
+    }
+    private static Mesh buildFull(Junction j,PointSettings s,Profile raw,double position,PointMesh.YBoundary boundary,List<Mesh.Quad> movingFaces){
         Mesh m=new Mesh();if(!s.enabled())return m;Profile p=raw.tune(s);double extent=PointMesh.extent(j,s);
         List<Track> roads=j.tracks();var crossings=new ArrayList<Crossing>();
         for(int a=0;a<3;a++)for(int b=a+1;b<3;b++){
@@ -77,7 +86,9 @@ public final class ThreeWayMesh {
                     V3 nb=bladePoint(j,branch,sign,b+step,open,bladeStart,blade,contact,p,s)
                         .sub(bladePoint(j,branch,sign,b-step,open,bladeStart,blade,contact,p,s)).lateral();
                     if(b>=bladeStart+blade-1e-9)nb=road.tangent(b).lateral();
-                    m.blade(x,y,na,nb,wa,wb,p,s,sign);
+                    int movingStart=m.quads.size();m.blade(x,y,na,nb,wa,wb,p,s,sign);
+                    if(a<=bladeStart&&b>bladeStart)m.bladeTipCap(x,na,wa,p,s,sign);
+                    appendRange(m,movingStart,movingFaces);
                 } else y=rail(road,b,sign,p);
                 if(!planed)m.rail(x,y,road.tangent(a).lateral(),road.tangent(b).lateral(),wa,wb,p,s,"rail");
                 previous=y;previousBlade=planed;
@@ -98,14 +109,14 @@ public final class ThreeWayMesh {
                 if(q.part().equals("wing"))q=new Mesh.Quad(q.a(),q.b(),q.c(),q.d(),q.surface(),q.part(),-2,q.uv());
                 Mesh.clip(before,q,seamOrigin,seamNormal.mul(-1));
             }m=before;
-            if(s.movableFrog())for(var c:crossings)m.quads.addAll(nose(c,crossings,Math.max(0,Math.min(1,(position-c.a*.5)/((c.b-c.a)*.5)))).quads);
+            if(s.movableFrog())for(var c:crossings){Mesh movingNose=nose(c,crossings,Math.max(0,Math.min(1,(position-c.a*.5)/((c.b-c.a)*.5))));int movingStart=m.quads.size();m.quads.addAll(movingNose.quads);appendRange(m,movingStart,movingFaces);}
         }
         for(int pair=0;pair<2;pair++){
             int a=pair,b=pair+1;double at=bladeStart+Math.min(1.1+pair*.35,blade/3);V3 origin=roads.get(a).at(at),forward=roads.get(a).tangent(at);
             V3 x=TurnoutFrame.contact(roads.get(a),at,1,p.centerOffset(),bladeOpen(a,1,position),bladeStart,blade,s,origin,forward);
             V3 y=TurnoutFrame.contact(roads.get(b),roads.get(b).nearest(origin),-1,p.centerOffset(),bladeOpen(b,-1,position),bladeStart,blade,s,origin,forward);
             double bearerTop=(p.detail()==null?p.top()-p.railHeight():p.top()-p.detail().railTop()+p.detail().bearerTop())+s.verticalOffset();
-            m.beam(x,y,.09,.09,bearerTop+.01,bearerTop+.05,p.steel(),"stretcher",-1);
+            int movingStart=m.quads.size();m.beam(x,y,.09,.09,bearerTop+.01,bearerTop+.05,p.steel(),"stretcher",-1);appendRange(m,movingStart,movingFaces);
         }
         List<GuardRails.Run> guards=GuardRails.assembled(j,s,p,null,boundary);
         double[] lasts={boundary.aLast(),boundary.thirdLast(),boundary.bLast()};int index=0;
@@ -123,6 +134,37 @@ public final class ThreeWayMesh {
         EndSleepers.finish(m,j,s,p,boundary);
         SleeperEdits.finish(m,j,s,p);
         for(var crossing:crossings)FrogFittings.clear(m,crossing.frog,p);
+        return m;
+    }
+    private static void appendRange(Mesh mesh,int start,List<Mesh.Quad> target){for(int i=start;i<mesh.quads.size();i++)target.add(mesh.quads.get(i));}
+    /** Rebuild only animated blades, crossing noses and stretcher bars. */
+    private static Mesh buildDynamic(Junction j,PointSettings s,Profile raw,double position,PointMesh.YBoundary boundary){
+        Mesh m=new Mesh();if(!s.enabled())return m;Profile p=raw.tune(s);double extent=PointMesh.extent(j,s);List<Track> roads=j.tracks();var crossings=new ArrayList<Crossing>();
+        for(int a=0;a<3;a++)for(int b=a+1;b<3;b++){Track x=roads.get(a),y=roads.get(b);Junction pair=new Junction(j.id()+":"+a+b,Junction.Kind.Y,x,y,j.center(),0,0,j.extent());crossings.add(new Crossing(a,b,new FrogGeometry(pair,s,p,extent,false),TurnoutFrame.side(pair,extent)));}
+        double first=crossings.stream().mapToDouble(c->Math.min(c.frog.sa,c.frog.sb)).min().orElse(extent*.5),bladeStart=TurnoutFrame.start(j,extent);
+        double blade=s.bladeLength()>0?s.bladeLength():Math.max(2,Math.min(9,(first-bladeStart)*.65)),contact=tipContact(blade,p,s);
+        double[] ends={boundary.aEnd(),boundary.thirdEnd(),boundary.bEnd()};
+        for(int branch=0;branch<3;branch++)for(int sign:new int[]{-1,1}){
+            Track road=roads.get(branch);double end=ends[branch];var cuts=new ArrayList<double[]>();
+            for(var c:crossings){int local=c.a==branch?0:c.b==branch?1:-1;if(local>=0&&sign==(local==0?c.sign:-c.sign))cuts.add(new double[]{c.frog.toe(local),c.frog.heel(local)});}
+            var distances=new TreeSet<Double>();distances.add(0D);distances.add(end);for(double d=.24;d<end;d+=.24)distances.add(d);for(var cut:cuts){distances.add(Math.max(0,Math.min(end,cut[0])));distances.add(Math.max(0,Math.min(end,cut[1])));}
+            boolean moving=branch==1||(branch==0?sign==1:sign==-1);var ds=new ArrayList<>(distances);V3 previous=null;boolean previousBlade=false;
+            for(int i=1;i<ds.size();i++){
+                double a=ds.get(i-1),b=ds.get(i),mid=(a+b)/2;if(cuts.stream().anyMatch(c->mid>c[0]&&mid<c[1])){previous=null;continue;}
+                if(!moving){previous=null;continue;}if(branch>0&&b<=bladeStart){previous=null;continue;}
+                boolean planed=b>bladeStart&&a<bladeStart+blade;if(!planed){previous=null;previousBlade=false;continue;}
+                V3 x=previous!=null&&previousBlade?previous:rail(road,a,sign,p),y;double wa=TurnoutFrame.taper(a-bladeStart,contact),wb=TurnoutFrame.taper(b-bladeStart,contact),open=bladeOpen(branch,sign,position);
+                x=bladePoint(j,branch,sign,a,open,bladeStart,blade,contact,p,s);y=bladePoint(j,branch,sign,b,open,bladeStart,blade,contact,p,s);if(previous!=null)x=previous;
+                double step=.0001;V3 na=bladePoint(j,branch,sign,a+step,open,bladeStart,blade,contact,p,s).sub(bladePoint(j,branch,sign,a-step,open,bladeStart,blade,contact,p,s)).lateral(),nb=bladePoint(j,branch,sign,b+step,open,bladeStart,blade,contact,p,s).sub(bladePoint(j,branch,sign,b-step,open,bladeStart,blade,contact,p,s)).lateral();if(b>=bladeStart+blade-1e-9)nb=road.tangent(b).lateral();
+                m.blade(x,y,na,nb,wa,wb,p,s,sign);if(a<=bladeStart&&b>bladeStart)m.bladeTipCap(x,na,wa,p,s,sign);previous=y;previousBlade=true;
+            }
+        }
+        if(s.movableFrog())for(var c:crossings)m.quads.addAll(nose(c,crossings,Math.max(0,Math.min(1,(position-c.a*.5)/((c.b-c.a)*.5)))).quads);
+        for(int pair=0;pair<2;pair++){
+            int a=pair,b=pair+1;double at=bladeStart+Math.min(1.1+pair*.35,blade/3);V3 origin=roads.get(a).at(at),forward=roads.get(a).tangent(at);
+            V3 x=TurnoutFrame.contact(roads.get(a),at,1,p.centerOffset(),bladeOpen(a,1,position),bladeStart,blade,s,origin,forward),y=TurnoutFrame.contact(roads.get(b),roads.get(b).nearest(origin),-1,p.centerOffset(),bladeOpen(b,-1,position),bladeStart,blade,s,origin,forward);
+            double bearerTop=(p.detail()==null?p.top()-p.railHeight():p.top()-p.detail().railTop()+p.detail().bearerTop())+s.verticalOffset();m.beam(x,y,.09,.09,bearerTop+.01,bearerTop+.05,p.steel(),"stretcher",-1);
+        }
         return m;
     }
     private static V3 rail(Track road,double d,double sign,Profile p){return road.at(d).add(road.tangent(d).lateral().mul(sign*p.centerOffset()));}

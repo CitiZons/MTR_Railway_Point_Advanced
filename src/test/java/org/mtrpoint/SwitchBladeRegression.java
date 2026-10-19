@@ -16,6 +16,7 @@ public final class SwitchBladeRegression {
 
     public static void run(){
         Profile raw=Profile.STANDARD;PointSettings s=PointSettings.DEFAULT;
+        toeEndFaces(raw,s);
         lSection(raw,s);
         for(double curve:new double[]{.0185,-.0185}){
             String label=curve>0?"diverging left":"diverging right";
@@ -32,6 +33,28 @@ public final class SwitchBladeRegression {
         require(contact<blade*.3,"Contact length must be a fraction of the switch rail, got "+contact+" of "+blade);
         require(Math.abs(TurnoutFrame.contact(blade,raw.tune(s),s)-TurnoutFrame.contact(blade,raw.tune(s.with(10,.076)),s))>.2,"A wider head must move the contact length");
         System.out.println("PASS: switch-rail contact region is the planed tip only, for the default and a custom section");
+    }
+    /** Swept blade segments omit their transverse faces to avoid internal plates. The first segment
+     *  still needs one mapped end section at the physical toe, in every animation frame. */
+    public static void toeEndFaces(Profile raw,PointSettings settings){
+        Profile.Surface material=raw.detail()==null?Profile.END_STEEL:raw.detail().endSteel();
+        Junction junction=turnout(.0185);List<Mesh.Quad> expected=null;
+        for(double position:new double[]{0,.5,1}){
+            Mesh mesh=PointMesh.build(junction,settings,raw,position);
+            List<Mesh.Quad> caps=mesh.quads.stream().filter(q->q.part().equals("blade")&&q.surface().equals(material)).toList();
+            require(!caps.isEmpty(),"Switch blade toe has no end face at throw "+position);
+            require(caps.stream().allMatch(q->q.uv()!=null&&q.uv().size()==8),"Switch blade toe end face lost its mapped end texture");
+            if(expected==null)expected=caps;
+            else require(caps.size()==expected.size(),"Switch blade toe cap topology changes with animation");
+        }
+        Track left=Regression.line("toe-left","toe-node","toe-l",V3.ZERO,new V3(-4,0,30));
+        Track right=Regression.line("toe-right","toe-node","toe-r",V3.ZERO,new V3(4,0,30));
+        Track middle=Regression.line("toe-middle","toe-node","toe-m",V3.ZERO,new V3(0,0,30));
+        Junction three=new Junction("toe-three",Junction.Kind.THREE,left,right,V3.ZERO,0,0,25,middle);
+        Mesh threeWay=ThreeWayMesh.build(three,settings,raw,.5,PointMesh.YBoundary.nominal(three,settings));
+        require(threeWay.quads.stream().anyMatch(q->q.part().equals("blade")&&q.surface().equals(material)),
+            "Three-way switch blade toe has no end face");
+        System.out.println("BLADE_TOE_CAPS: PASS exposed toe sections keep end material and stable topology through animation");
     }
     public static void lSection(Profile raw,PointSettings s){
         Profile p=raw.tune(s);double footWidth=p.detail()==null?p.footWidth():p.detail().rails().stream()

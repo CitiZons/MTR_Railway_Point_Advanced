@@ -11,15 +11,41 @@ final class ContinuousGuards {
     private static final Map<List<Mesh.Quad>,Map<String,List<Mesh.Quad>>> CLIPS=Collections.synchronizedMap(new IdentityHashMap<>());
     private static final Map<String,Ends> FRAME_ENDS=new HashMap<>();
     private static final Set<String> FRAME_TERMINALS=new HashSet<>();
+    private record Topology(Track track,Set<String> styles) {}
+    private static final Map<String,Topology> TOPOLOGY=new HashMap<>();
+    private static final Map<String,Map<String,Set<String>>> ADJACENCY=new HashMap<>();
     private static final int MAX_CLIP_SOURCES=512;
     static void begin(){FRAME_ENDS.clear();FRAME_TERMINALS.clear();}
-    static void clear(){FRAME_ENDS.clear();FRAME_TERMINALS.clear();CLIPS.clear();}
+    static void clear(){FRAME_ENDS.clear();FRAME_TERMINALS.clear();CLIPS.clear();TOPOLOGY.clear();ADJACENCY.clear();}
+
+    /** Keep endpoint ownership synchronized with sampled rail geometry and styles. */
+    static void update(Rail rail,Track track){
+        String id=rail.getHexId();var styles=new HashSet<String>();for(String raw:rail.getStyles())styles.add(Profiles.canonical(raw));
+        Topology old=TOPOLOGY.get(id);
+        if(old!=null&&old.track==track&&old.styles.equals(styles))return;
+        if(old!=null)index(id,old.track,old.styles,false);
+        if(track==null)TOPOLOGY.remove(id);else{Set<String> frozen=Set.copyOf(styles);TOPOLOGY.put(id,new Topology(track,frozen));index(id,track,frozen,true);}
+        FRAME_ENDS.clear();
+    }
+    private static void index(String id,Track track,Set<String> styles,boolean add){
+        for(String style:styles){var byNode=ADJACENCY.get(style);if(add&&byNode==null){byNode=new HashMap<>();ADJACENCY.put(style,byNode);}if(byNode==null)continue;
+            for(String node:List.of(track.startNode,track.endNode)){var ids=byNode.get(node);if(add){if(ids==null){ids=new HashSet<>();byNode.put(node,ids);}ids.add(id);}else if(ids!=null){ids.remove(id);if(ids.isEmpty())byNode.remove(node);}}
+            if(byNode.isEmpty())ADJACENCY.remove(style);
+        }
+    }
+    static void retain(Set<String> ids){for(String id:new ArrayList<>(TOPOLOGY.keySet()))if(!ids.contains(id)){Topology old=TOPOLOGY.remove(id);index(id,old.track,old.styles,false);}FRAME_ENDS.clear();}
 
     static Ends exposed(Rail rail,String style){
         Track track=RailSampler.sample(rail);if(track==null)return new Ends(false,false);
-        String key=rail.getHexId()+"/"+Profiles.canonical(style);return FRAME_ENDS.computeIfAbsent(key,k->exposed(track,style,RailSampler.styledTracks(style)));
+        String canonical=Profiles.canonical(style),key=rail.getHexId()+"/"+canonical;
+        return FRAME_ENDS.computeIfAbsent(key,k->{boolean start=true,end=true;
+            var nodes=ADJACENCY.get(canonical);if(nodes!=null){Set<String> atStart=nodes.get(track.startNode),atEnd=nodes.get(track.endNode);
+                if(atStart!=null)for(String id:atStart)if(!id.equals(track.id)){start=false;break;}
+                if(atEnd!=null)for(String id:atEnd)if(!id.equals(track.id)){end=false;break;}}
+            return new Ends(start,end);});
     }
 
+    /** Pure endpoint helper used by geometry regressions with an explicit same-style fixture. */
     static Ends exposed(Track track,String style,Collection<Track> sameStyle){
         boolean start=true,end=true;
         for(Track other:sameStyle)if(!other.id.equals(track.id)){

@@ -71,9 +71,7 @@ public final class OrdinaryRailCacheRegression {
         RailCellCache.begin();
         RailCellCache.capture(()->RailCellCache.submit(source,frame,true,0,0,1,V3.ZERO,false)).submit();
         RailCellCache.finish(new Mesh());
-        var cached=RailCellCache.class.getDeclaredField("CACHED");cached.setAccessible(true);
-        Object batch=((Map<?,?>)cached.get(null)).values().iterator().next();
-        var meshField=batch.getClass().getDeclaredField("mesh");meshField.setAccessible(true);Mesh mesh=(Mesh)meshField.get(batch);
+        Mesh mesh=RailCellCache.activeMeshes().get(0);
         var result=mesh.quads.get(0).normals();require(result!=null,"Cached support lost normals");
         for(int i=0;i<4;i++){
             V3 expected=frame.rigid(source.get(0).normals().get(i),true,0).sub(frame.rigid(V3.ZERO,true,0)).unit();
@@ -90,7 +88,7 @@ public final class OrdinaryRailCacheRegression {
         @SuppressWarnings("unchecked") var samples=(Map<String,Object>)samplesField.get(null);
         var sampleType=Class.forName("org.mtrpoint.client.RailSampler$Sample");var sampleConstructor=sampleType.getDeclaredConstructors()[0];sampleConstructor.setAccessible(true);
         var track=new Track("outside_detector","a","b",List.of(V3.ZERO,new V3(0,0,10)));
-        Object sample=sampleConstructor.newInstance(track,List.of(),null,null,null,null);
+        Object sample=sampleConstructor.newInstance(track,List.of(),null,null,null,null,Set.of());
         samples.put(track.id,sample);
         try{
             RailSampler.retain(Set.of("detector"));

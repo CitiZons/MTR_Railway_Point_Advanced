@@ -2,17 +2,17 @@
 
 [English](README.en.md) | [简体中文](README.zh-CN.md)
 
-![Minecraft 1.20.1](https://img.shields.io/badge/Minecraft-1.20.1-62a35a?style=flat-square) ![Forge 47.4.18](https://img.shields.io/badge/Forge-47.4.18-f59e0b?style=flat-square) ![MTR 4.0.3](https://img.shields.io/badge/MTR-4.0.3-3b82f6?style=flat-square) ![Version 0.1.7](https://img.shields.io/badge/version-0.1.7-2563eb?style=flat-square) ![License MIT](https://img.shields.io/badge/license-MIT-8b5cf6?style=flat-square)
+![Minecraft 1.20.1](https://img.shields.io/badge/Minecraft-1.20.1-62a35a?style=flat-square) ![Forge 47.4.18](https://img.shields.io/badge/Forge-47.4.18-f59e0b?style=flat-square) ![MTR 4.0.3](https://img.shields.io/badge/MTR-4.0.3-3b82f6?style=flat-square) ![Version 0.1.8](https://img.shields.io/badge/version-0.1.8-2563eb?style=flat-square) ![License MIT](https://img.shields.io/badge/license-MIT-8b5cf6?style=flat-square)
 
-A visual turnout addon for [MTR](https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway), version **0.1.7**. It generates stock rails, switch rails, wings, guards, frogs, flangeways, rods, fittings and sleepers along the actual alignment, grade and cant. Default models and materials are included; rail resource packs are optional.
+A visual turnout addon for [MTR](https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway), version **0.1.8**. It generates stock rails, switch rails, wings, guards, frogs, flangeways, rods, fittings and sleepers along the actual alignment, grade and cant. Default models and materials are included; rail resource packs are optional.
 
 ## Installation
 
 Requires Minecraft **1.20.1**, Forge **47.4.18** and MTR Forge **4.0.3**.
 
-Install `mtr_railway_point_advanced-0.1.7.jar` in both client and server `mods` folders. Use the same build on both sides and remove older copies. The network protocol is `3`; do not install the development-only `point-runtime-probe` in a normal game.
+Install `mtr_railway_point_advanced-0.1.8.jar` in both client and server `mods` folders. Use the same build on both sides and remove older copies. The network protocol is `3`; do not install the development-only `point-runtime-probe` in a normal game.
 
-The companion pack is **[Citizons Railway](https://github.com/CitiZons/MTR_Citizons_Railway) 0.1.3**, with ballast, slab, direct-support and continuous-guard styles. The mod and pack have separate version numbers.
+The companion pack is **[Citizons Railway](https://github.com/CitiZons/MTR_Citizons_Railway) 0.1.4**, with ballast, slab, direct-support and continuous-guard styles. The mod and pack have separate version numbers.
 
 ## Usage
 
@@ -25,12 +25,13 @@ The companion pack is **[Citizons Railway](https://github.com/CitiZons/MTR_Citiz
 ## Features
 
 - Same-node Y, curved and three-way turnouts, fixed diamonds, flat crossings and scissors crossover groups.
-- Closed switch tips meet the stock head; the planed lower section changes from an asymmetric L-section to the full I-section.
+- Closed switch tips meet the stock head; the planed lower section changes from an asymmetric L-section to the full I-section. Exposed tips retain textured end faces throughout animation.
 - Three-way turnouts use two complementary adjacent-route blade pairs. The middle route keeps wings and omits redundant guards; V frogs use the ordinary turnout section.
 - All three beds share fitting placement. Overlapping blade fittings use slide plates; guard seats replace ordinary fittings, and slab blocks follow the final seats.
 - Only fittings inside the V nose are omitted; outside guard clips, braces and plates remain, as do sleepers, support blocks and beds.
 - Joints receive patches for gaps up to 2 cm. Only matching open edges are bridged, preserving flangeways and rail-section openings.
 - Switch and movable-frog animation follows read-only MTR and BRsignal operating state.
+- Continuous centre and outer guards retain their inward-tapered terminal shapes during movement, without waiting for the surrounding ordinary-rail cache to finish.
 
 ## Resource packs
 
@@ -67,9 +68,13 @@ Adjust client presentation in **Mods → MTR Railway Point Advanced → Config**
 
 Turnout takeover distance controls turnout replacement only. Ordinary resource-pack rails continue to use their LODs and rendering cache when takeover is disabled.
 
-Ordinary rails are cached as complete 8 m chunks, including sleepers and fittings. Rotating the camera changes visibility without rebuilding unchanged chunk geometry. LOD is selected per chunk, with a small transition margin to reduce repeated switching near a distance boundary; geometry is refreshed when its LOD, track, style or turnout ownership changes. OBJ support normals are retained for smooth shading.
+Ordinary rails are cached as complete 8 m chunks, including sleepers and fittings. Unchanged geometry remains cached while its world chunks stay loaded, including when the camera turns or the player leaves and returns. LOD is selected per chunk with a small transition margin; recently used detail levels can be reused when switching back. OBJ support normals are retained for smooth shading.
 
-World meshes use entity cutout rendering with Iris/Oculus support and Optional Rail banking samples. Static and moving parts are cached separately; joint patches update when source meshes change. FPS still depends on model complexity, shaders and view distance.
+Beds and joint patches update by local region. Track edits, LOD changes and turnout handoffs refresh the affected geometry rather than rebuilding the entire visible line. Unchanged GPU buffers are reused, and background geometry preparation and per-frame upload budgets reduce movement stutter.
+
+Turnouts are prepared ahead of the takeover range, with the preparation distance adapting to movement speed and observed preparation time. Ordinary rails take priority over turnout preparation. Each turnout switches from native rendering as soon as its own complete replacement is ready, without waiting for every turnout or shared component in the group. Cold preparation can still take time; native rendering remains until that turnout is ready.
+
+World meshes use entity cutout rendering with Iris/Oculus support and Optional Rail banking samples. Static and moving parts are cached separately, and animation poses reuse fixed geometry. FPS still depends on model complexity, shaders and view distance.
 
 ## Limitations
 
@@ -86,7 +91,7 @@ Requires JDK 17 and the compile-time dependency `../MTR_BRsignal_addon/libs/MTR-
 .\gradlew.bat build --offline --no-daemon --console=plain
 ```
 
-The build produces `build/libs/mtr_railway_point_advanced-0.1.7.jar`.
+The build produces `build/libs/mtr_railway_point_advanced-0.1.8.jar`.
 
 ## Documentation and licence
 

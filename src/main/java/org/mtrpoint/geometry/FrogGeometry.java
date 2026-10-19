@@ -32,10 +32,37 @@ public final class FrogGeometry {
     public V3 center(){return inner(0,sa).lerp(inner(1,sb),.5);}
     /** Moving insert only; the adjoining full-width heart rails belong to the shared assembly. */
     public Mesh movableNose(double position){
-        Mesh complete=new Mesh();build(complete,position);Mesh nose=new Mesh();
+        Mesh complete=buildDynamic(position);Mesh nose=new Mesh();
         int count=12*(p.detail()!=null&&!p.detail().rails().isEmpty()?p.detail().rails().size():18);
         for(var q:complete.quads)if(q.part().equals("frog")&&nose.quads.size()<count)nose.quad(q);
         return nose;
+    }
+    /** Moving crossing insert only; omits the stationary wings, guards and heart rails. */
+    public Mesh buildDynamic(double position){
+        Mesh m=new Mesh();if(!s.movableFrog())return m;
+        V3 center=inner(0,sa).lerp(inner(1,sb),.5);
+        V3 forward=j.a().tangent(sa).add(j.b().tangent(sb)).unit();
+        double sine=Math.max(.04,Math.abs(V3.crossXZ(j.a().tangent(sa),j.b().tangent(sb))));
+        double setback=Math.min(tail*.55,p.headWidth()/sine*.65),gap=Math.max(.02,s.flangeway()+s.wingGapDelta());
+        V3 tip=center.add(forward.mul(setback-.35));V3[] contacts=new V3[2];
+        for(int branch=0;branch<2;branch++){
+            Wing w=wing(branch,gap);double d=(w.kneeOther+w.endAt)/2;
+            for(int k=0;k<8;k++){
+                V3 point=wingPoint(1-branch,d,gap,0),u=wingPoint(1-branch,d+.01,gap,0).sub(wingPoint(1-branch,d-.01,gap,0)).mul(50);
+                double den=u.dot(forward);if(Math.abs(den)<.1)break;
+                d=clamp(d-point.sub(tip).dot(forward)/den,w.kneeOther,w.endAt);
+            }
+            double step=(w.endAt-w.kneeOther)/12,cell=clamp(Math.floor((d-w.kneeOther)/step),0,11);
+            V3 a=wingPoint(1-branch,w.kneeOther+step*cell,gap,0),b=wingPoint(1-branch,w.kneeOther+step*(cell+1),gap,0);
+            V3 tangent=b.sub(a).unit(),outward=tangent.lateral().mul(-sign(1-branch));
+            contacts[branch]=a.lerp(b,clamp((d-w.kneeOther-step*cell)/step,0,1)).sub(outward.mul(p.headWidth()*.505));
+        }
+        tip=contacts[0].lerp(contacts[1],position);
+        double neck=Math.min(tail*.7,Math.max(setback+.18,p.footWidth()/sine));
+        V3 rootA=inner(0,Math.min(heel(0),sa+neck)),rootB=inner(1,Math.min(heel(1),sb+neck)),root=rootA.lerp(rootB,.5);
+        segment(m,tip,root,.015,(rootA.distance(rootB)+p.headWidth())/p.headWidth(),"frog");
+        for(int branch=0;branch<2;branch++)segment(m,branch==0?rootA:rootB,inner(branch,heel(branch)),1,1,"frog");
+        return m;
     }
     public void build(Mesh m,double position){
         V3 center=inner(0,sa).lerp(inner(1,sb),.5);

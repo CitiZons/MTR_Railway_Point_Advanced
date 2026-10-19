@@ -29,6 +29,11 @@ public abstract class RailRenderMixin {
     private static void point$model(ClientWorld world,RailResource resource,boolean flip,boolean[] types,BlockPos pos,double x1,double z1,double x2,double z2,double x3,double z3,double x4,double z4,double y1,double y2,CallbackInfo ci){
         Rail rail=point$current.get();
         V3 a=new V3(x1,y1,z1),b=new V3(x3,y2,z3);
+        if(OrdinaryRailCache.registered(rail,resource,flip)){
+            V3 center=a.lerp(b,.5);
+            if(PointClient.suppress(rail,resource.getId(),center,0)||OrdinaryRailCache.ready(rail,resource,flip,center)){types[1]=true;ci.cancel();}
+            return;
+        }
         if(PointClient.suppress(rail,resource.getId(),a.lerp(b,.5),0)){PointRenderer.preserve(rail,resource,flip,a,b);types[1]=true;ci.cancel();}
         else if(SleeperSeams.render(rail,resource,flip,a,b)){types[1]=true;ci.cancel();}
         else if(RailLod.render(rail,resource,flip,a,b)){types[1]=true;ci.cancel();}

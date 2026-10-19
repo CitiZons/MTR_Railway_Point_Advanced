@@ -7,9 +7,13 @@ import java.util.*;
 
 public final class RailSampler {
     private record Bank(double start,double end,Object frame) {}
-    private record Sample(Track track,List<Bank> banks,Rail rail,Object math,Object nodeA,Object nodeB) {}
+    private record Sample(Track track,List<Bank> banks,Rail rail,Object math,Object nodeA,Object nodeB,Set<String> styles) {}
+    private record Validation(Rail rail,long tick,Object math,Set<String> styles) {}
     private static final Map<String,Sample> SAMPLES=new HashMap<>();
+    private static final Map<String,Validation> VALIDATED=new HashMap<>();
     private record ModelFrames(Sample sample,Track line,List<RailSweep> frames,Map<Cell,RailSweep> cells,List<Cell> callbacks) {}
+    private record ModelFrameSnapshot(Track line,List<RailSweep> frames) {}
+    private record BankRoadSnapshot(Track track,List<Bank> banks) {}
     private record ModelKey(String railId,String style) {}
     private static final Map<ModelKey,ModelFrames> MODEL_FRAMES=new HashMap<>();
     private static java.lang.reflect.Field frameField;
@@ -36,7 +40,7 @@ public final class RailSampler {
     }
     private static void initialize()throws ReflectiveOperationException{if(initialized)return;if(net.minecraftforge.fml.ModList.get().isLoaded("mtr_optional_rail_addon")){try{Class<?> geometry=Class.forName("org.mtroptional.client.RailGeometry");frameField=geometry.getField("FRAME");renderMethod=geometry.getMethod("render",Rail.class,RailMath.RenderRail.class,double.class,float.class,float.class);nodeMethod=Class.forName("org.mtroptional.client.ClientNodes").getMethod("get",long.class);Class<?> frame=Class.forName("org.mtroptional.client.RailGeometry$Frame");bankMethod=frame.getMethod("bank",double.class,double.class,double.class);cantAMethod=frame.getMethod("cantA");cantBMethod=frame.getMethod("cantB");tangentAMethod=frame.getMethod("ta");tangentBMethod=frame.getMethod("tb");}catch(ReflectiveOperationException ex){optionalAdapterBroken=true;warnOptionalFailure(ex);}}initialized=true;}
     private static void warnOptionalFailure(Throwable ex){if(!optionalAdapterWarning){optionalAdapterWarning=true;org.mtrpoint.PointMod.LOG.warn("Optional Rail adapter unavailable; using native MTR rail geometry",ex);}}
-    public static void clear(){SAMPLES.clear();MODEL_FRAMES.clear();}
+    public static void clear(){SAMPLES.clear();MODEL_FRAMES.clear();VALIDATED.clear();ContinuousGuards.clear();}
     public static void clearModels(){MODEL_FRAMES.clear();}
     public static RailSweep sweep(Rail rail,org.mtr.mod.resource.RailResource resource,V3 a,V3 b){
         if(rail!=null){if(!SAMPLES.containsKey(rail.getHexId()))sample(rail);var frames=modelFrames(rail.getHexId(),resource.getId());if(frames!=null){var frame=frames.cells.get(new Cell(a,b));if(frame!=null)return frame;}}
@@ -49,11 +53,20 @@ public final class RailSampler {
         }}}catch(ReflectiveOperationException ex){org.mtrpoint.PointMod.LOG.warn("Could not sample rail section",ex);}return null;
     }
     public static Track sample(Rail rail){
-        var ends=new ObjectArraySet<Position>();rail.writePositions(ends);if(ends.size()!=2)return null;Position[] p=ends.toArray(new Position[0]);
+        long tick=net.minecraft.client.Minecraft.getInstance().level==null?Long.MIN_VALUE:net.minecraft.client.Minecraft.getInstance().level.getGameTime();
+        Sample quick=SAMPLES.get(rail.getHexId());Validation validated=VALIDATED.get(rail.getHexId());
+        if(quick!=null&&quick.rail==rail&&validated!=null&&validated.rail==rail&&validated.tick==tick
+            &&validated.math==rail.railMath&&sameStyles(rail.getStyles(),validated.styles))return quick.track;
+        VALIDATED.put(rail.getHexId(),new Validation(rail,tick,rail.railMath,Set.copyOf(rail.getStyles())));
+        var ends=new ObjectArraySet<Position>();rail.writePositions(ends);if(ends.size()!=2){SAMPLES.remove(rail.getHexId());MODEL_FRAMES.keySet().removeIf(k->k.railId.equals(rail.getHexId()));ContinuousGuards.update(rail,null);return null;}Position[] p=ends.toArray(new Position[0]);
         Object na=null,nb=null;
         try{initialize();if(nodeMethod!=null&&!optionalAdapterBroken){na=nodeMethod.invoke(null,net.minecraft.core.BlockPos.asLong((int)p[0].getX(),(int)p[0].getY(),(int)p[0].getZ()));nb=nodeMethod.invoke(null,net.minecraft.core.BlockPos.asLong((int)p[1].getX(),(int)p[1].getY(),(int)p[1].getZ()));}}catch(ReflectiveOperationException ex){warnOptionalFailure(ex);}
         Sample cached=SAMPLES.get(rail.getHexId());
-        if(cached!=null&&cached.rail==rail&&cached.math==rail.railMath&&Objects.equals(cached.nodeA,na)&&Objects.equals(cached.nodeB,nb))return cached.track;
+        Set<String> styles=new HashSet<>();for(String style:rail.getStyles())styles.add(Profiles.canonical(style));styles=Set.copyOf(styles);
+        if(cached!=null&&cached.rail==rail&&cached.math==rail.railMath&&Objects.equals(cached.nodeA,na)&&Objects.equals(cached.nodeB,nb)){
+            if(!cached.styles.equals(styles)){cached=new Sample(cached.track,cached.banks,cached.rail,cached.math,cached.nodeA,cached.nodeB,styles);SAMPLES.put(rail.getHexId(),cached);}
+            ContinuousGuards.update(rail,cached.track);return cached.track;
+        }
         sampleBuilds++;
         var start=rail.railMath.getPosition(0,false);
         if(Math.hypot(p[0].getX()+.5-start.x,p[0].getZ()+.5-start.z)>Math.hypot(p[1].getX()+.5-start.x,p[1].getZ()+.5-start.z)){Position t=p[0];p[0]=p[1];p[1]=t;}
@@ -62,7 +75,12 @@ public final class RailSampler {
         boolean optional=net.minecraftforge.fml.ModList.get().isLoaded("mtr_optional_rail_addon");
         if(optional&&!optionalAdapterBroken)try{renderMethod.invoke(null,rail,callback,.4,0F,0F);}catch(ReflectiveOperationException ex){warnOptionalFailure(ex);rail.railMath.render(callback,.4,0,0);}
         else rail.railMath.render(callback,.4,0,0);
-        if(points.size()<2)return null;Track track=new Track(rail.getHexId(),node(p[0]),node(p[1]),points);SAMPLES.put(track.id,new Sample(track,List.copyOf(banks),rail,rail.railMath,na,nb));return track;
+        if(points.size()<2){SAMPLES.remove(rail.getHexId());MODEL_FRAMES.keySet().removeIf(k->k.railId.equals(rail.getHexId()));ContinuousGuards.update(rail,null);return null;}Track track=new Track(rail.getHexId(),node(p[0]),node(p[1]),points);SAMPLES.put(track.id,new Sample(track,List.copyOf(banks),rail,rail.railMath,na,nb,styles));ContinuousGuards.update(rail,track);return track;
+    }
+    private static boolean sameStyles(Collection<String> current,Set<String> cached){
+        if(current.size()!=cached.size())return false;
+        for(String style:current)if(!cached.contains(style))return false;
+        return true;
     }
     /** Match the actual MTR/Optional Rail repeat cells, including reversed branch orientation. */
     public static PointMesh.YBoundary yBoundary(Junction j,PointSettings settings){
@@ -89,11 +107,6 @@ public final class RailSampler {
     public static List<Track> tracks(){
         var out=new ArrayList<Track>();
         for(Sample sample:SAMPLES.values())if(sample.track!=null)out.add(sample.track);
-        return List.copyOf(out);
-    }
-    static List<Track> styledTracks(String style){
-        style=Profiles.canonical(style);var out=new ArrayList<Track>();
-        for(Sample sample:SAMPLES.values())for(String raw:sample.rail.getStyles())if(Profiles.canonical(raw).equals(style)){out.add(sample.track);break;}
         return List.copyOf(out);
     }
     record EndpointSlice(RailSweep sweep,double from,double to) {}
@@ -175,11 +188,27 @@ public final class RailSampler {
     /** Opt-in OBJ profiles follow the exact native model cells instead of the flat-texture
      *  endpoint bank adapter. Cell length, direction, grade and model-offset pivot all agree. */
     public static Mesh bank(Mesh mesh,Junction j,List<Track> roads,String style){
-        if(roads.stream().noneMatch(t->SAMPLES.containsKey(t.id)))return mesh;
-        if(Profiles.model(style)==null)return bank(mesh,j,roads);
-        var frames=new ArrayList<ModelFrames>();
-        for(var road:roads){var f=modelFrames(road.id,style);if(f!=null)frames.add(f);}
-        if(frames.isEmpty())return mesh;
+        return bankSnapshot(roads,style).apply(mesh);
+    }
+    /** Capture profile, rail samples, sweeps, and bank frames on the caller thread. The returned
+     *  operator reads only that snapshot and the input mesh; Optional Rail Frame is an immutable record. */
+    static java.util.function.UnaryOperator<Mesh> bankSnapshot(List<Track> roads,String style){
+        if(roads.stream().noneMatch(t->SAMPLES.containsKey(t.id)))return java.util.function.UnaryOperator.identity();
+        if(style!=null&&Profiles.model(style)!=null){
+            var frames=new ArrayList<ModelFrameSnapshot>();
+            for(var road:roads){var f=modelFrames(road.id,style);if(f!=null)frames.add(new ModelFrameSnapshot(f.line,List.copyOf(f.frames)));}
+            if(frames.isEmpty())return java.util.function.UnaryOperator.identity();
+            List<ModelFrameSnapshot> snapshot=List.copyOf(frames);
+            return mesh->transformModel(mesh,snapshot);
+        }
+        var snapshots=new ArrayList<BankRoadSnapshot>();
+        for(Track road:roads){Sample sample=SAMPLES.get(road.id);if(sample!=null)snapshots.add(new BankRoadSnapshot(sample.track,List.copyOf(sample.banks)));}
+        if(snapshots.stream().allMatch(sample->sample.banks.isEmpty()))return java.util.function.UnaryOperator.identity();
+        List<BankRoadSnapshot> snapshot=List.copyOf(snapshots);
+        java.lang.reflect.Method transform=bankMethod;
+        return mesh->transformBanks(mesh,snapshot,transform);
+    }
+    private static Mesh transformModel(Mesh mesh,List<ModelFrameSnapshot> frames){
         Mesh transformed=new Mesh();Map<V3,V3> cache=new HashMap<>();
         for(var q:mesh.quads)transformed.quad(new Mesh.Quad(cache.computeIfAbsent(q.a(),p->modelPoint(p,frames)),cache.computeIfAbsent(q.b(),p->modelPoint(p,frames)),cache.computeIfAbsent(q.c(),p->modelPoint(p,frames)),cache.computeIfAbsent(q.d(),p->modelPoint(p,frames)),q.surface(),q.part(),q.index(),q.uv()));
         return transformed;
@@ -223,26 +252,27 @@ public final class RailSampler {
         var frames=modelFrames(rail.getHexId(),resource.getId());
         return frames==null?List.of():frames.callbacks;
     }
-    private static V3 modelPoint(V3 p,List<ModelFrames> frames){
-        ModelFrames nearest=null;double station=0,best=Double.MAX_VALUE;
+    private static V3 modelPoint(V3 p,List<ModelFrameSnapshot> frames){
+        ModelFrameSnapshot nearest=null;double station=0,best=Double.MAX_VALUE;
         for(var f:frames){double s=f.line.nearestHorizontal(p),error=p.distance(f.line.at(s));if(error<best){best=error;station=s;nearest=f;}}
         if(nearest==null)return p;
         int index=Arrays.binarySearch(nearest.line.distance,station);if(index<0)index=-index-2;
         return nearest.frames.get(Math.max(0,Math.min(nearest.frames.size()-1,index))).world(p);
     }
     public static Mesh bank(Mesh mesh,Junction j,List<Track> roads){
-        List<Sample> samples=roads.stream().map(t->SAMPLES.get(t.id)).filter(Objects::nonNull).toList();
-        if(samples.stream().allMatch(v->v.banks.isEmpty()))return mesh;
+        return bankSnapshot(roads,null).apply(mesh);
+    }
+    private static Mesh transformBanks(Mesh mesh,List<BankRoadSnapshot> samples,java.lang.reflect.Method transform){
         Mesh transformed=new Mesh();Map<V3,V3> cache=new HashMap<>();
-        for(var q:mesh.quads)transformed.quad(new Mesh.Quad(cache.computeIfAbsent(q.a(),p->bankPoint(p,samples)),cache.computeIfAbsent(q.b(),p->bankPoint(p,samples)),cache.computeIfAbsent(q.c(),p->bankPoint(p,samples)),cache.computeIfAbsent(q.d(),p->bankPoint(p,samples)),q.surface(),q.part(),q.index(),q.uv()));
+        for(var q:mesh.quads)transformed.quad(new Mesh.Quad(cache.computeIfAbsent(q.a(),p->bankPoint(p,samples,transform)),cache.computeIfAbsent(q.b(),p->bankPoint(p,samples,transform)),cache.computeIfAbsent(q.c(),p->bankPoint(p,samples,transform)),cache.computeIfAbsent(q.d(),p->bankPoint(p,samples,transform)),q.surface(),q.part(),q.index(),q.uv()));
         return transformed;
     }
-    private static V3 bankPoint(V3 p,List<Sample> samples){
-        Sample s=null;double distance=0,best=Double.MAX_VALUE;
-        for(Sample candidate:samples){double d=candidate.track.nearest(p),error=p.distance(candidate.track.at(d));if(error<best){best=error;distance=d;s=candidate;}}
+    private static V3 bankPoint(V3 p,List<BankRoadSnapshot> samples,java.lang.reflect.Method transform){
+        BankRoadSnapshot s=null;double distance=0,best=Double.MAX_VALUE;
+        for(BankRoadSnapshot candidate:samples){double d=candidate.track.nearest(p),error=p.distance(candidate.track.at(d));if(error<best){best=error;distance=d;s=candidate;}}
         if(s==null)return p;
-        for(Bank bank:s.banks)if(distance>=bank.start-1e-6&&distance<=bank.end+1e-6)try{var v=(org.mtr.core.tool.Vector)bankMethod.invoke(bank.frame,p.x(),p.y(),p.z());return new V3(v.x,v.y,v.z);}catch(ReflectiveOperationException ex){return p;}return p;
+        for(Bank bank:s.banks)if(distance>=bank.start-1e-6&&distance<=bank.end+1e-6)try{var v=(org.mtr.core.tool.Vector)transform.invoke(bank.frame,p.x(),p.y(),p.z());return new V3(v.x,v.y,v.z);}catch(ReflectiveOperationException ex){return p;}return p;
     }
-    public static void retain(Set<String> detectorIds){Set<String> ids=OrdinaryRailCache.sampleIds(detectorIds);SAMPLES.keySet().retainAll(ids);MODEL_FRAMES.entrySet().removeIf(e->!ids.contains(e.getValue().sample.track.id));SleeperSeams.retain(ids);}
+    public static void retain(Set<String> detectorIds){Set<String> ids=OrdinaryRailCache.sampleIds(detectorIds);if(net.minecraft.client.Minecraft.getInstance()!=null&&net.minecraft.client.Minecraft.getInstance().level!=null)ids.retainAll(org.mtr.mod.client.MinecraftClientData.getInstance().railIdMap.keySet());SAMPLES.keySet().retainAll(ids);VALIDATED.keySet().retainAll(ids);MODEL_FRAMES.entrySet().removeIf(e->!ids.contains(e.getValue().sample.track.id));ContinuousGuards.retain(ids);SleeperSeams.retain(ids);}
     public static String node(Position p){return p.getX()+","+p.getY()+","+p.getZ();}
 }
