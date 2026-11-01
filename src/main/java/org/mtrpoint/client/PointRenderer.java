@@ -67,7 +67,9 @@ public final class PointRenderer {
         for(var road:source.group!=null?source.group.tracks():j.tracks()){
             double c=road.nearest(j.center()),start=j.kind()==Junction.Kind.DIAMOND?Math.max(0,c-extent):0,end=j.kind()==Junction.Kind.DIAMOND?Math.min(road.length,c+extent):extent;
             if(source.group!=null){start=0;end=road.length;}
-            for(double d=start;d<=end+.25;d+=.25){V3 v=road.at(Math.min(end,d));x0=Math.min(x0,v.x());x1=Math.max(x1,v.x());z0=Math.min(z0,v.z());z1=Math.max(z1,v.z());}
+            // Track points already are the sampled polyline used by intersection tests; reuse
+            // them instead of resampling every road at quarter-metre intervals on the main thread.
+            for(V3 v:road.points){x0=Math.min(x0,v.x());x1=Math.max(x1,v.x());z0=Math.min(z0,v.z());z1=Math.max(z1,v.z());}
         }
         double pad=source.profile.gauge()/2+source.settings.sleeperOverhang()+.5;return new Bounds(x0-pad,x1+pad,z0-pad,z1+pad);
     }
@@ -394,7 +396,7 @@ public final class PointRenderer {
         preserveAttachments(rail,resource,flip,a,b);
     }
     public static void cell(org.mtr.core.data.Rail rail,org.mtr.mod.resource.RailResource resource,boolean flip,V3 a,V3 b,List<Mesh.Quad> faces,V3 shift,boolean swept){
-        if(faces.isEmpty())return;ProfileModel model=Profiles.model(resource.getId());
+        if(faces.isEmpty())return;ProfileModel model=RailLod.model(resource.getId(),a.lerp(b,.5));
         double zMin=model==null?-resource.getRepeatInterval()/2:model.detail().zMin(),zMax=model==null?resource.getRepeatInterval()/2:model.detail().zMax();
         RailCellCache.submit(faces,RailSampler.sweep(rail,resource,a,b),flip,resource.getModelYOffset(),zMin,zMax,shift,swept);
     }

@@ -1,5 +1,21 @@
 # 更新记录 / Changelog
 
+## 0.1.9 — 未发布 / Unreleased
+
+- 服务端在 MTR 模拟器线程核对真实道岔 ID 和坐标后保存外观，拒绝伪造的记录。
+- 登录及切换维度时分批同步外观，每 tick 最多发送两批；网络协议升至 4，客户端和服务端需使用同一构建。
+- 将轨道发现拆成每帧约 0.5 ms 的短分片，避免连续移动时集中扫描已加载轨道表。
+- 将交叉检测放入有界后台准备队列，主线程只接收完成结果；普通轨道预加载按 8 m 区块选择配置的高、中、低精度模型。
+- 优化密集轨道场景的包围盒计算，复用轨道已有采样点，减少 `refreshScissors` 的主线程开销；增加 `MTR Point probe:` 性能探针日志。
+- 保持版本号 0.1.9；配套 Citizons Railway 支持 0.1.4 及更新版本。
+
+- Validate appearance edits against the actual MTR junction ID and position on the simulation thread.
+- Send appearance snapshots in bounded batches, at most two per server tick. Network protocol 4 requires matching client and server builds.
+- Spread rail discovery across approximately 0.5 ms main-thread slices to avoid concentrated scans during continuous movement.
+- Run crossing detection through the bounded background preparation queue; ordinary-rail preloading selects the configured high, medium or low model per 8 m chunk.
+- Reduce dense-layout main-thread work by reusing sampled rail points for component bounds, and add `MTR Point probe:` performance logs.
+- Keep version 0.1.9 and support Citizons Railway 0.1.4 and later.
+
 ## 0.1.8 — 2026-10-19
 
 相对 0.1.7：

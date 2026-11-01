@@ -23,6 +23,6 @@ public final class PointMod {
     }
     private void login(PlayerEvent.PlayerLoggedInEvent e){if(e.getEntity() instanceof ServerPlayer p)PointNetwork.full(p);}
     private void dimension(PlayerEvent.PlayerChangedDimensionEvent e){if(e.getEntity() instanceof ServerPlayer p)PointNetwork.full(p);}
-    private void tick(TickEvent.ServerTickEvent e){if(e.phase==TickEvent.Phase.END)PointNetwork.flushMotion();}
-    private void stopped(ServerStoppedEvent e){org.mtrpoint.compat.BrObserver.clear();}
+    private void tick(TickEvent.ServerTickEvent e){if(e.phase==TickEvent.Phase.END){PointNetwork.flushFull();PointNetwork.flushMotion();}}
+    private void stopped(ServerStoppedEvent e){PointNetwork.clearFull();org.mtrpoint.compat.BrObserver.clear();}
 }

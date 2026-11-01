@@ -188,14 +188,17 @@ public final class PointClient {
     private static Map<String,List<PointNetwork.Movement>> movements=Map.of();
     private static PointNetwork.Motion motion;private static long motionReceived;
     private static final IncrementalDetector DETECTOR=new IncrementalDetector();
+    private static final GeometryJobs.Slot<List<Junction>> DETECTION_JOB=new GeometryJobs.Slot<>();
+    private static final long DISCOVERY_SLICE_NANOS=500_000L;
     private static int ticks;private static Object level;private static long signature;private static boolean refreshProfiles;
     private static double lastRebuildX=Double.NaN,lastRebuildZ=Double.NaN;
+    private static List<Rail> pendingRails=List.of();private static int pendingRailIndex;private static Map<String,Rail> pendingCandidates;private static boolean scanActive;private static long scanStarted;private static List<Track> pendingDetectionTracks;private static long pendingDetectionSignature;private static long pendingDetectionStarted;
     private static final IdentityHashMap<View,Boolean> TAKEOVER_CACHE=new IdentityHashMap<>();
     private static final Set<String> NATIVE_STYLE_FAMILY=Set.of("default","default_3d","default_3d_siding");
     private static double takeoverCameraX=Double.NaN,takeoverCameraY=Double.NaN,takeoverCameraZ=Double.NaN,takeoverCachedDistance=-1;
     private static int serverFeatures;private static int serverModelFormat=-1;private static boolean handshakeComplete;
     public static String message="";
-    public static void clear(){PointPreparation.clear();GeometryJobs.clear();DETECTOR.clear();views=List.of();SETTINGS.clear();motion=null;signature=0;lastRebuildX=lastRebuildZ=Double.NaN;serverFeatures=0;serverModelFormat=-1;handshakeComplete=false;Profiles.clear();RailSampler.clear();BY_RAIL.clear();groupJunctions=List.of();groupsById=Map.of();movements=Map.of();TAKEOVER_CACHE.clear();takeoverCachedDistance=-1;PointRenderer.clear();}
+    public static void clear(){PointPreparation.clear();GeometryJobs.clear();DETECTOR.clear();DETECTION_JOB.clear();views=List.of();SETTINGS.clear();motion=null;signature=0;lastRebuildX=lastRebuildZ=Double.NaN;pendingRails=List.of();pendingCandidates=null;pendingRailIndex=0;scanActive=false;scanStarted=0;pendingDetectionTracks=null;pendingDetectionStarted=0;serverFeatures=0;serverModelFormat=-1;handshakeComplete=false;Profiles.clear();RailSampler.clear();BY_RAIL.clear();groupJunctions=List.of();groupsById=Map.of();movements=Map.of();TAKEOVER_CACHE.clear();takeoverCachedDistance=-1;PointRenderer.clear();}
     public static void handshake(PointNetwork.Handshake m){
         serverFeatures=m.features();serverModelFormat=m.modelFormat();
         handshakeComplete=m.protocol()==PointNetwork.PROTOCOL_VERSION&&serverModelFormat>=0&&serverModelFormat<=PointNetwork.MODEL_FORMAT_VERSION;
@@ -215,10 +218,23 @@ public final class PointClient {
         if(mc.screen instanceof BlueprintScreen screen)screen.acknowledge(m.id(),m.message());
         else if(mc.screen instanceof PointSelectionScreen screen)screen.acknowledge(m.id(),m.revision(),m.message());
     }
+    public static void receiveSnapshot(PointNetwork.Snapshot m){
+        var mc=Minecraft.getInstance();if(mc.level==null||!mc.level.dimension().location().toString().equals(m.dimension()))return;level=mc.level;
+        if(m.clear()){SETTINGS.clear();signature=0;}
+        var changed=new HashSet<String>();
+        for(var entry:m.entries()){
+            var old=SETTINGS.get(entry.id());
+            if(old==null||entry.revision()>old.revision()){
+                SETTINGS.put(entry.id(),new AppearanceData.Entry(AppearanceData.decode(entry.json()),entry.revision()));
+                changed.add(entry.id());
+            }
+        }
+        for(View view:views)if(changed.contains(view.junction.id()))view.preview(saved(view.junction.id()));
+    }
     public static void motion(PointNetwork.Motion m){motion=m;motionReceived=System.currentTimeMillis();movements=index(m.entries());}
     public static void tick(){
         var mc=Minecraft.getInstance();if(mc.level!=level){level=mc.level;clear();}if(mc.level==null)return;
-        if(++ticks%20==0)rebuild();
+        ++ticks;pollDetection();if(scanActive||ticks%20==0)rebuild();
         // Native vehicle paths are expensive to walk and allocate a movement list each time.
         // Updating on alternating ticks keeps turnout response effectively real-time while
         // removing half of this allocation-heavy polling from the client tick.
@@ -228,13 +244,23 @@ public final class PointClient {
     public static void invalidate(){signature=0;lastRebuildX=lastRebuildZ=Double.NaN;refreshProfiles=true;Profiles.clear();}
     public static void rebuild(){
         var mc=Minecraft.getInstance();if(mc.player==null)return;
-        lastRebuildX=mc.player.getX();lastRebuildZ=mc.player.getZ();
+        if(pendingDetectionTracks!=null)return;
+        double playerX=mc.player.getX(),playerZ=mc.player.getZ();
+        if(!scanActive&&!refreshProfiles&&Double.isFinite(lastRebuildX)&&
+            Math.hypot(playerX-lastRebuildX,playerZ-lastRebuildZ)<16)return;
+        lastRebuildX=playerX;lastRebuildZ=playerZ;
         // Keep discovery tied to takeover distance while retaining already known junctions as
         // long as their source rails stay loaded; walking changes visibility, not membership.
         double scan=Math.max(16,Math.min(256,PointPreparation.cpuDistance()+16));
         var loadedRails=MinecraftClientData.getInstance().railIdMap;
-        var candidates=new HashMap<String,Rail>();
-        loadedRails.values().stream().filter(r->r.getTransportMode()==TransportMode.TRAIN&&r.railMath.getLength()>1).filter(r->{var m=r.railMath;return mc.player.getX()>=m.minX-scan&&mc.player.getX()<=m.maxX+scan&&mc.player.getZ()>=m.minZ-scan&&mc.player.getZ()<=m.maxZ+scan;}).forEach(r->candidates.put(r.getHexId(),r));
+        if(!scanActive){pendingRails=List.copyOf(loadedRails.values());pendingRailIndex=0;pendingCandidates=new HashMap<>();scanStarted=System.nanoTime();scanActive=true;}
+        // Spread rail sampling across ticks so continuous movement cannot create a full-scan hitch.
+        // shortcut: a 0.5 ms slice may delay newly discovered junctions, but keeps frame time bounded.
+        long deadline=System.nanoTime()+DISCOVERY_SLICE_NANOS;
+        while(pendingRailIndex<pendingRails.size()&&System.nanoTime()<deadline){Rail r=pendingRails.get(pendingRailIndex++);if(r.getTransportMode()==TransportMode.TRAIN&&r.railMath.getLength()>1){var m=r.railMath;if(mc.player.getX()>=m.minX-scan&&mc.player.getX()<=m.maxX+scan&&mc.player.getZ()>=m.minZ-scan&&mc.player.getZ()<=m.maxZ+scan)pendingCandidates.put(r.getHexId(),r);}}
+        if(pendingRailIndex<pendingRails.size())return;
+        var candidates=pendingCandidates;long scanMs=(System.nanoTime()-scanStarted)/1_000_000;pendingRails=List.of();pendingCandidates=null;scanActive=false;
+        PointMod.LOG.info("MTR Point probe: scan={}ms rails={} candidates={}",scanMs,loadedRails.size(),candidates.size());
         // Keep previously discovered junctions while their source rails remain loaded. The scan
         // still admits nearby new rails, but walking away alone no longer drops known geometry.
         for(View view:views)if(mc.level.hasChunk((int)Math.floor(view.junction.center().x()/16),(int)Math.floor(view.junction.center().z()/16)))for(Track track:view.junction.tracks()){
@@ -244,9 +270,17 @@ public final class PointClient {
         // Check identities and Optional Rail settings; unchanged tracks reuse their samples.
         var tracks=new ArrayList<Track>();long sig=1;
         for(Rail r:rails){Track t=RailSampler.sample(r);if(t==null)continue;tracks.add(t);sig=31*sig+System.identityHashCode(t);sig=31*sig+r.getStyles().hashCode();}
-        if(sig==signature)return;signature=sig;
+        if(sig==signature)return;
+        pendingDetectionTracks=List.copyOf(tracks);pendingDetectionSignature=sig;pendingDetectionStarted=System.nanoTime();pollDetection();
+    }
+    private static void pollDetection(){
+        if(pendingDetectionTracks==null)return;
+        var tracks=pendingDetectionTracks;var junctions=DETECTION_JOB.getBackground(()->DETECTOR.find(tracks));
+        if(junctions==null)return;
+        long detectionMs=(System.nanoTime()-pendingDetectionStarted)/1_000_000;DETECTION_JOB.clear();pendingDetectionTracks=null;signature=pendingDetectionSignature;
+        PointMod.LOG.info("MTR Point probe: detection={}ms tracks={} junctions={}",detectionMs,tracks.size(),junctions.size());
+        var mc=Minecraft.getInstance();
         Map<String,View> previous=new HashMap<>();views.forEach(v->previous.put(v.junction.id(),v));var next=new ArrayList<View>();
-        var junctions=DETECTOR.find(tracks);
         var known=ScissorsLayout.find(junctions.stream().filter(j->saved(j.id()).enabled()).toList());
         for(Junction j:junctions){
             // An interior crossing a shared centre already draws in full must not build a second,
@@ -267,6 +301,7 @@ public final class PointClient {
         return tracks.size()==b.tracks().size();
     }
     private static void refreshScissors(){
+        long started=System.nanoTime();
         var junctions=views.stream().filter(v->v.settings.enabled()).map(v->v.junction).toList();
         if(!junctions.equals(groupJunctions)){
             groupJunctions=junctions;var members=new HashMap<String,ScissorsLayout>();
@@ -283,6 +318,7 @@ public final class PointClient {
         refreshCrossings(views);
         buildByRail(views);
         PointRenderer.refreshComponents();
+        PointMod.LOG.info("MTR Point probe: refreshScissors={}ms views={}",(System.nanoTime()-started)/1_000_000,views.size());
     }
     /** MTR's own cells are hidden per rail, so the index is built from every road a view answers
      *  for - the steel it draws and the channels that cut it - not from its junction alone. */

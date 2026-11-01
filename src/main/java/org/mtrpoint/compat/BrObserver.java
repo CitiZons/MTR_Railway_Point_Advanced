@@ -9,10 +9,13 @@ import java.util.concurrent.ConcurrentHashMap;
 /** Reads only BR's published immutable snapshots. No reserve, release, path or display API calls. */
 public final class BrObserver {
     public static final Map<String,PointNetwork.Motion> latest=new ConcurrentHashMap<>();
+    private static final Map<String,Simulator> SIMULATORS=new ConcurrentHashMap<>();
     private static final Map<String,Long> lastRead=new ConcurrentHashMap<>();
     private static boolean warned;
-    public static void clear(){latest.clear();lastRead.clear();warned=false;}
+    public static void clear(){latest.clear();SIMULATORS.clear();lastRead.clear();warned=false;}
+    public static Simulator simulator(String dimension){return SIMULATORS.get(dimension);}
     public static void observe(Simulator simulator){
+        SIMULATORS.put(simulator.dimension,simulator);
         long now=System.currentTimeMillis();if(now-lastRead.getOrDefault(simulator.dimension,0L)<150)return;lastRead.put(simulator.dimension,now);
         if(!net.minecraftforge.fml.ModList.get().isLoaded("mtr_brsignal_addon"))return;
         // MTR stores namespace/path; Minecraft network dimensions use namespace:path.

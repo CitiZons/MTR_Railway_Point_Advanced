@@ -2,17 +2,17 @@
 
 [English](README.en.md) | [简体中文](README.zh-CN.md)
 
-![Minecraft 1.20.1](https://img.shields.io/badge/Minecraft-1.20.1-62a35a?style=flat-square) ![Forge 47.4.18](https://img.shields.io/badge/Forge-47.4.18-f59e0b?style=flat-square) ![MTR 4.0.3](https://img.shields.io/badge/MTR-4.0.3-3b82f6?style=flat-square) ![Version 0.1.8](https://img.shields.io/badge/version-0.1.8-2563eb?style=flat-square) ![License MIT](https://img.shields.io/badge/license-MIT-8b5cf6?style=flat-square)
+![Minecraft 1.20.1](https://img.shields.io/badge/Minecraft-1.20.1-62a35a?style=flat-square) ![Forge 47.4.18](https://img.shields.io/badge/Forge-47.4.18-f59e0b?style=flat-square) ![MTR 4.0.3](https://img.shields.io/badge/MTR-4.0.3-3b82f6?style=flat-square) ![Version 0.1.9](https://img.shields.io/badge/version-0.1.9-2563eb?style=flat-square) ![License MIT](https://img.shields.io/badge/license-MIT-8b5cf6?style=flat-square)
 
-A visual turnout addon for [MTR](https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway), version **0.1.8**. It generates stock rails, switch rails, wings, guards, frogs, flangeways, rods, fittings and sleepers along the actual alignment, grade and cant. Default models and materials are included; rail resource packs are optional.
+A visual turnout addon for [MTR](https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway), version **0.1.9**. It generates stock rails, switch rails, wings, guards, frogs, flangeways, rods, fittings and sleepers along the actual alignment, grade and cant. Default models and materials are included; rail resource packs are optional.
 
 ## Installation
 
 Requires Minecraft **1.20.1**, Forge **47.4.18** and MTR Forge **4.0.3**.
 
-Install `mtr_railway_point_advanced-0.1.8.jar` in both client and server `mods` folders. Use the same build on both sides and remove older copies. The network protocol is `3`; do not install the development-only `point-runtime-probe` in a normal game.
+Install `mtr_railway_point_advanced-0.1.9.jar` in both client and server `mods` folders. Use the same build on both sides and remove older copies. The network protocol is `4`; do not install the development-only `point-runtime-probe` in a normal game.
 
-The companion pack is **[Citizons Railway](https://github.com/CitiZons/MTR_Citizons_Railway) 0.1.4**, with ballast, slab, direct-support and continuous-guard styles. The mod and pack have separate version numbers.
+The companion pack is **[Citizons Railway](https://github.com/CitiZons/MTR_Citizons_Railway) 0.1.4+**, with ballast, slab, direct-support and continuous-guard styles. The mod and pack have separate version numbers.
 
 ## Usage
 
@@ -72,6 +72,8 @@ Ordinary rails are cached as complete 8 m chunks, including sleepers and fitting
 
 Beds and joint patches update by local region. Track edits, LOD changes and turnout handoffs refresh the affected geometry rather than rebuilding the entire visible line. Unchanged GPU buffers are reused, and background geometry preparation and per-frame upload budgets reduce movement stutter.
 
+Rail discovery is spread across short main-thread slices, while junction detection runs through the bounded background preparation queue. Ordinary-rail preloading selects the configured high, medium or low LOD per 8 m chunk instead of forcing the high-detail model. Runtime probe messages begin with `MTR Point probe:` and are intended for performance investigation only.
+
 Turnouts are prepared ahead of the takeover range, with the preparation distance adapting to movement speed and observed preparation time. Ordinary rails take priority over turnout preparation. Each turnout switches from native rendering as soon as its own complete replacement is ready, without waiting for every turnout or shared component in the group. Cold preparation can still take time; native rendering remains until that turnout is ready.
 
 World meshes use entity cutout rendering with Iris/Oculus support and Optional Rail banking samples. Static and moving parts are cached separately, and animation poses reuse fixed geometry. FPS still depends on model complexity, shaders and view distance.
@@ -91,7 +93,7 @@ Requires JDK 17 and the compile-time dependency `../MTR_BRsignal_addon/libs/MTR-
 .\gradlew.bat build --offline --no-daemon --console=plain
 ```
 
-The build produces `build/libs/mtr_railway_point_advanced-0.1.8.jar`.
+The build produces `build/libs/mtr_railway_point_advanced-0.1.9.jar`.
 
 ## Documentation and licence
 
