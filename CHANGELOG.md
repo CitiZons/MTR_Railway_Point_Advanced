@@ -1,6 +1,22 @@
 # 更新记录 / Changelog
 
-## 0.1.9 — 未发布 / Unreleased
+## 0.1.10
+
+- 将可见道岔的准备任务提升到 urgent 队列，并按玩家距离优先提交，减少近处道岔等待时间。
+- 每帧最多启动 35 个道岔准备任务，扩大有界待处理窗口；使用固定两个后台 worker 提高吞吐，避免额外线程和无界内存增长。
+- 近处道岔使用独立的 priority GPU 规划和上传预算；普通与后台任务继续使用较低预算，避免集中上传造成帧时间尖峰。
+- 将材质包道岔的单个 GPU batch 提高到最多 2048 面，减少高面数模型的 VertexBuffer 数量、指纹计算和上传调度。
+- 保留连续移动期间的分片轨道发现、交叉检测后台队列、区域化轨道缓存和 GPU 批次复用。
+- 修复本轮实验性轨道对象复用导致的材质包道岔缺失，恢复按当前 MTR 轨道对象采样。
+
+- Promote visible turnout preparation to the urgent queue and submit by player distance, reducing wait time for nearby turnouts.
+- Start at most 35 turnout preparation tasks per frame with a larger bounded pending window; use two fixed background workers to improve throughput without unbounded thread or memory growth.
+- Give nearby turnouts a separate priority GPU planning and upload budget; ordinary and background work keep lower budgets to avoid upload spikes.
+- Raise the per-batch resource-pack turnout limit to 2048 faces, reducing VertexBuffer count, fingerprint work and upload scheduling for high-face-count models.
+- Retain sliced rail discovery during continuous movement, background crossing detection, regional rail caches and GPU batch reuse.
+- Restore sampling from the current MTR rail object after experimental rail-object reuse caused missing resource-pack turnouts.
+
+## 0.1.9
 
 - 服务端在 MTR 模拟器线程核对真实道岔 ID 和坐标后保存外观，拒绝伪造的记录。
 - 登录及切换维度时分批同步外观，每 tick 最多发送两批；网络协议升至 4，客户端和服务端需使用同一构建。

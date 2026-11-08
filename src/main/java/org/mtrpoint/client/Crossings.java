@@ -37,29 +37,46 @@ public final class Crossings {
     /** Every rail that really crosses one of these roads at the same running height. Its flange
      *  channels have to cut that junction's steel, however the crossing rail is pieced. */
     public static List<Track> cutters(List<Track> roads,List<Track> all){
+        return List.copyOf(centerlineCutters(roads,all).values());
+    }
+    private static Map<String,Track> centerlineCutters(List<Track> roads,List<Track> all){
         Map<String,Track> out=new LinkedHashMap<>();
         for(Track other:all){
-            if(roads.stream().anyMatch(r->r.id.equals(other.id)))continue;
-            boolean meets=false;
-            for(Track road:roads)if(meets(road,other)){meets=true;break;}
-            if(meets)out.putIfAbsent(other.id,other);
+            if(containsRoad(roads,other.id))continue;
+            for(Track road:roads)if(meets(road,other)){out.putIfAbsent(other.id,other);break;}
         }
-        return List.copyOf(out.values());
+        return out;
+    }
+    private static boolean containsRoad(List<Track> roads,String id){
+        for(Track road:roads)if(road.id.equals(id))return true;
+        return false;
     }
     /** Track centre lines can miss each other while a running rail crosses the neighbouring
      * route's flange channel, notably beside the last frog of an asymmetric three-way turnout. */
     public static List<Track> cutters(List<Track> roads,List<Track> all,Profile p,PointSettings settings){
-        var result=new LinkedHashMap<String,Track>();
-        for(var track:cutters(roads,all))result.put(track.id,track);
-        var running=new ArrayList<Track>();
-        for(var road:roads)for(int sign:new int[]{-1,1})running.add(offset(road,sign*p.centerOffset()));
+        var result=centerlineCutters(roads,all);
         double gap=Math.max(.02,settings.flangeway()+settings.wingGapDelta());
         double channel=p.centerOffset()-p.headWidth()/2-gap/2;
-        for(var other:all){
-            if(result.containsKey(other.id)||roads.stream().anyMatch(r->r.id.equals(other.id)))continue;
+        // Either polyline can shift toward the other, so allow the sum of both offsets.
+        double margin=Math.abs(p.centerOffset())+Math.abs(channel)+1e-8;
+        var running=new ArrayList<Track>();
+        candidates: for(var other:all){
+            if(result.containsKey(other.id)||containsRoad(roads,other.id))continue;
+            boolean nearby=false;
+            for(Track road:roads)if(road.overlapsXZ(other,margin)){nearby=true;break;}
+            if(!nearby)continue;
+            if(running.isEmpty()){
+                for(var road:roads){
+                    running.add(offset(road,-p.centerOffset()));
+                    running.add(offset(road,p.centerOffset()));
+                }
+            }
             for(int sign:new int[]{-1,1}){
                 Track flange=offset(other,sign*channel);
-                if(running.stream().anyMatch(rail->meets(rail,flange))){result.put(other.id,other);break;}
+                for(Track rail:running)if(meets(rail,flange)){
+                    result.put(other.id,other);
+                    continue candidates;
+                }
             }
         }
         return List.copyOf(result.values());
@@ -72,17 +89,10 @@ public final class Crossings {
 
     /** Test segment intersections, not distances from a sparse set of sample stations. */
     public static boolean meets(Track a,Track b){
+        if(!a.overlapsXZ(b,0))return false;
         V3 centerA=a.at(a.length/2),centerB=b.at(b.length/2);
         if(centerA.sub(centerB).length()>a.length/2+b.length/2+1)return false;
-        for(int i=1;i<a.points.size();i++)for(int k=1;k<b.points.size();k++){
-            V3 u=a.points.get(i-1),v=a.points.get(i),x=b.points.get(k-1),y=b.points.get(k);
-            if(Math.max(u.x(),v.x())<Math.min(x.x(),y.x())||Math.max(x.x(),y.x())<Math.min(u.x(),v.x())
-                ||Math.max(u.z(),v.z())<Math.min(x.z(),y.z())||Math.max(x.z(),y.z())<Math.min(u.z(),v.z()))continue;
-            if(Math.abs(V3.crossXZ(v.sub(u).unit(),y.sub(x).unit()))<SINE)continue;
-            double[] at=org.mtrpoint.geometry.Detector.intersection(u,v,x,y);
-            if(at!=null&&Math.abs(u.lerp(v,at[0]).y()-x.lerp(y,at[1]).y())<=HEIGHT)return true;
-        }
-        return false;
+        return a.crossesAtGrade(b,SINE,HEIGHT);
     }
 
     /** Crossing points shared by several pairwise junctions, worked out from their centres. A

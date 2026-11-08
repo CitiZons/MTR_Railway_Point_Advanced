@@ -61,11 +61,15 @@ final class RailCellCache {
     private static final int MAX_SPLITS=256,MAX_SPLIT_FACES=65536;
     private static final Map<Chunk,LinkedHashMap<List<Cell>,Batch>> CACHED=new HashMap<>();
     private static final class Batch {List<Cell> cells;Mesh mesh;PointGpu gpu=new PointGpu();long used;Batch(List<Cell> cells){this.cells=cells;}}
-    private record WorldCell(Mesh mesh,long vertices){}
-    private static final class PreparedCell {final GeometryJobs.Slot<WorldCell> job=new GeometryJobs.Slot<>();WorldCell result;long used;}
+    private static final class WorldCell {
+        final Mesh mesh;final long vertices;long used;
+        WorldCell(Mesh mesh,long vertices){this.mesh=mesh;this.vertices=vertices;}
+    }
+    private static final class PreparedCell {final GeometryJobs.Slot<WorldCell> job=new GeometryJobs.Slot<>();long used;}
     private record Scene(List<Batch> bodies,Mesh bed,Mesh joints){}
     private static final Map<Long,Scene> COMMITTED=new LinkedHashMap<>(),DESIRED=new LinkedHashMap<>();
-    private static final Map<Cell,PreparedCell> WORLD_CELLS=new HashMap<>();
+    private static final Map<Cell,WorldCell> WORLD_CELLS=new HashMap<>();
+    private static final Map<Cell,PreparedCell> PENDING_CELLS=new LinkedHashMap<>(16,.75F,true);
     private static boolean complete,trimNeeded;
     private static final long MAX_INACTIVE_FACES=250_000,MAX_INACTIVE_CELL_FACES=131_072;
     private static final Set<String> INVALIDATED=new HashSet<>();
@@ -118,7 +122,7 @@ final class RailCellCache {
     }
     static void clear(){
         OrdinaryRailCache.clear();for(var variants:CACHED.values())for(var b:variants.values())b.gpu.close();CACHED.clear();
-        BED_REGIONS.clear();JOINT_REGIONS.clear();WORLD_CELLS.clear();GeometryJobs.clear();COMMITTED.clear();DESIRED.clear();
+        BED_REGIONS.clear();JOINT_REGIONS.clear();WORLD_CELLS.clear();PENDING_CELLS.clear();GeometryJobs.clear();COMMITTED.clear();DESIRED.clear();
         regionalActive=0;SPLITS.clear();splitFaces=0;discard();builds=transformedVertices=0;
     }
     private static long region(Chunk c){return region(Math.floorDiv(c.x,2),Math.floorDiv(c.z,2));}
@@ -142,15 +146,21 @@ final class RailCellCache {
                 if(owner==null||batch.cells.stream().anyMatch(c->Objects.equals(c.owner,owner))){batch.gpu.close();it.remove();}}
         }
         int x=(int)(key>>32),z=(int)key;BED_REGIONS.removeRegion(x,z);JOINT_REGIONS.removeRegion(x,z);
-        WORLD_CELLS.entrySet().removeIf(e->{Cell c=e.getKey();boolean remove=(owner==null||Objects.equals(c.owner,owner))&&c.frame!=null&&region(chunk(c.frame.a().lerp(c.frame.b(),.5)))==key;if(remove)e.getValue().job.clear();return remove;});
+        removeCells(c->(owner==null||Objects.equals(c.owner,owner))&&c.frame!=null&&region(chunk(c.frame.a().lerp(c.frame.b(),.5)))==key);
     }
     private static Mesh world(Cell cell){
         return world(cell,false);
     }
     private static Mesh world(Cell cell,boolean priority){
-        PreparedCell prepared=WORLD_CELLS.computeIfAbsent(cell,k->new PreparedCell());prepared.used=frame;
-        if(prepared.result==null){WorldCell result=priority?prepared.job.getPriority(()->transform(cell)):prepared.job.get(()->transform(cell));if(result==null)return null;prepared.result=result;transformedVertices+=result.vertices;}
-        return prepared.result.mesh;
+        WorldCell cached=WORLD_CELLS.get(cell);
+        if(cached!=null){cached.used=frame;return cached.mesh;}
+        PreparedCell prepared=PENDING_CELLS.computeIfAbsent(cell,k->new PreparedCell());
+        prepared.used=frame;
+        WorldCell result=priority?prepared.job.getPriority(()->transform(cell)):prepared.job.get(()->transform(cell));
+        if(result==null)return null;
+        PENDING_CELLS.remove(cell);prepared.job.clear();result.used=frame;
+        WORLD_CELLS.put(cell,result);transformedVertices+=result.vertices;
+        return result.mesh;
     }
     static void finish(Mesh turnoutSteel){finish(List.of(turnoutSteel));}
     static void finish(List<Mesh> turnoutSources){
@@ -175,6 +185,11 @@ final class RailCellCache {
         QUEUED.entrySet().removeIf(entry->entry.getValue().isEmpty());
         var bedSources=new ArrayList<Mesh>();
         for(Cell cell:QUEUED.getOrDefault(BEDS,List.of())){Mesh mesh=world(cell);if(mesh==null)complete=false;else bedSources.add(mesh);}
+        // Terminal cells can be requested before finish advances the frame.
+        for(var it=PENDING_CELLS.values().iterator();it.hasNext();){
+            PreparedCell pending=it.next();if(pending.used>=frame-1)break;
+            pending.job.clear();it.remove();
+        }
         if(!complete)return;
         BED_REGIONS.pin(COMMITTED.values().stream().map(Scene::bed).filter(Objects::nonNull).toList());
         JOINT_REGIONS.pin(COMMITTED.values().stream().map(Scene::joints).filter(Objects::nonNull).toList());
@@ -199,10 +214,9 @@ final class RailCellCache {
             for(var variants:CACHED.values())variants.values().removeIf(evict::contains);
         }
         var cells=new HashSet<Cell>();for(var variants:CACHED.values())for(Batch batch:variants.values())cells.addAll(batch.cells);cells.addAll(QUEUED.getOrDefault(BEDS,List.of()));
-        WORLD_CELLS.entrySet().removeIf(entry->{if(cells.contains(entry.getKey())||entry.getValue().result!=null)return false;entry.getValue().job.clear();return true;});
-        var old=new ArrayList<Map.Entry<Cell,PreparedCell>>();long oldFaces=0;
-        for(var entry:WORLD_CELLS.entrySet())if(!cells.contains(entry.getKey())&&entry.getValue().result!=null){old.add(entry);oldFaces+=entry.getValue().result.mesh.quads.size();}
-        if(oldFaces>MAX_INACTIVE_CELL_FACES){old.sort(Comparator.comparingLong(e->e.getValue().used));for(var entry:old){if(oldFaces<=MAX_INACTIVE_CELL_FACES)break;oldFaces-=entry.getValue().result.mesh.quads.size();entry.getValue().job.clear();WORLD_CELLS.remove(entry.getKey());}}
+        var old=new ArrayList<Map.Entry<Cell,WorldCell>>();long oldFaces=0;
+        for(var entry:WORLD_CELLS.entrySet())if(!cells.contains(entry.getKey())){old.add(entry);oldFaces+=entry.getValue().mesh.quads.size();}
+        if(oldFaces>MAX_INACTIVE_CELL_FACES){old.sort(Comparator.comparingLong(e->e.getValue().used));for(var entry:old){if(oldFaces<=MAX_INACTIVE_CELL_FACES)break;oldFaces-=entry.getValue().mesh.quads.size();WORLD_CELLS.remove(entry.getKey());}}
     }
     private static void retainLoaded(){
         var level=net.minecraft.client.Minecraft.getInstance().level;
@@ -210,7 +224,11 @@ final class RailCellCache {
         COMMITTED.keySet().removeIf(key->!loaded.test(key));DESIRED.keySet().removeIf(key->!loaded.test(key));
         for(var it=CACHED.entrySet().iterator();it.hasNext();){var e=it.next();if(!loaded.test(region(e.getKey()))){e.getValue().values().forEach(b->b.gpu.close());it.remove();}}
         BED_REGIONS.retainRegions(loaded);JOINT_REGIONS.retainRegions(loaded);
-        WORLD_CELLS.entrySet().removeIf(e->{Cell c=e.getKey();boolean remove=c.frame!=null&&!loaded.test(region(chunk(c.frame.a().lerp(c.frame.b(),.5))));if(remove)e.getValue().job.clear();return remove;});
+        removeCells(c->c.frame!=null&&!loaded.test(region(chunk(c.frame.a().lerp(c.frame.b(),.5)))));
+    }
+    private static void removeCells(java.util.function.Predicate<Cell> remove){
+        WORLD_CELLS.keySet().removeIf(remove);
+        PENDING_CELLS.entrySet().removeIf(e->{if(!remove.test(e.getKey()))return false;e.getValue().job.clear();return true;});
     }
     private static WorldCell transform(Cell cell){
         Mesh mesh=new Mesh();long[] count={0};

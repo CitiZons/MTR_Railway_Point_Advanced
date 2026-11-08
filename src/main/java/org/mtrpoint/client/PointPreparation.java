@@ -38,9 +38,9 @@ final class PointPreparation {
     static Timing started(PointClient.View view){return TIMES.computeIfAbsent(view,key->new Timing());}
     static boolean admit(PointClient.View view){
         var mc=Minecraft.getInstance();if(mc==null||mc.level==null||TIMES.containsKey(view))return true;
-        if(startsThisFrame>=1)return false;
+        if(startsThisFrame>=20)return false;
         long pending=TIMES.entrySet().stream().filter(e->e.getValue().cpuEnd==0&&eligible(e.getKey(),cpuDistance())).count();
-        if(pending>=2)return false;startsThisFrame++;started(view);return true;
+        if(pending>=40)return false;startsThisFrame++;started(view);return true;
     }
     static void framesReady(PointClient.View view){Timing t=started(view);if(t.frames==0)t.frames=System.nanoTime();}
     static void assemblyReady(PointClient.View view){Timing t=started(view);if(t.assembly==0)t.assembly=System.nanoTime();}

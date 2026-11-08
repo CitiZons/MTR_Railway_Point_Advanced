@@ -146,13 +146,13 @@ public final class PointRenderer {
             if(!PointPreparation.eligible(source.view,PointPreparation.cpuDistance())||!source.view.prepareAsync())continue;
             Mesh viewMesh=source.view.mesh();boolean gpuEligible=PointPreparation.eligible(source.view,PointPreparation.gpuDistance());
             boolean needsSnapshot=!FALLBACKS.containsKey(source.view)&&!FALLBACK_SNAPSHOTS.containsKey(source.view);
-            if(needsSnapshot&&fallbackSnapshots>=1)continue;
+            if(needsSnapshot&&fallbackSnapshots>=20)continue;
             if(needsSnapshot)fallbackSnapshots++;
             prepareFallback(source,viewMesh);
             Fallback fallback=FALLBACKS.get(source.view);
             if(fallback!=null&&gpuEligible){
                 syncFallbackPose(fallback,viewMesh);
-                PointGpu gpu=FALLBACK_GPU.computeIfAbsent(source.view,key->new PointGpu());gpu.setBackground(true);
+                PointGpu gpu=FALLBACK_GPU.computeIfAbsent(source.view,key->new PointGpu());gpu.setPriority(true);gpu.setBackground(false);
                 gpu.update(fallback.mesh,source.view.renderedPosition(),source.settings.movableFrog(),false);
                 for(var attachment:fallback.attachments.values())attachment.gpu.update(attachment.mesh,0,false,false);
                 if(gpu.hasSource(fallback.mesh)&&gpu.readyForDraw()&&fallback.attachments.values().stream().allMatch(a->a.gpu.hasSource(a.mesh)&&a.gpu.readyForDraw()))PointPreparation.gpuReady(source.view);
@@ -178,12 +178,12 @@ public final class PointRenderer {
                 if(newSnapshot)pooledSnapshots++;
                 var slot=ASSEMBLY_JOBS.computeIfAbsent(component,k->new GeometryJobs.Slot<>());
                 var snapshot=ASSEMBLY_SNAPSHOTS.computeIfAbsent(component,k->snapshot(component,false));
-                AssemblyResult result=slot.getBackground(()->assembleSnapshot(snapshot));
+                AssemblyResult result=slot.getPriority(()->assembleSnapshot(snapshot));
                 if(result!=null){assembly=result.mesh;ASSEMBLIES.put(component,assembly);if(!result.beds.isEmpty())ASSEMBLY_BEDS.put(assembly,result.beds);slot.clear();ASSEMBLY_JOBS.remove(component);ASSEMBLY_SNAPSHOTS.remove(component);guardBuilds++;for(var source:component)PointPreparation.assemblyReady(source.view);}
             }
             if(assembly!=null&&component.stream().allMatch(s->PointPreparation.eligible(s.view,PointPreparation.gpuDistance()))){
-                for(var source:component){Mesh mesh=source.view.mesh();PointGpu gpu=GPU.computeIfAbsent(source.view,k->new PointGpu());gpu.setBackground(true);gpu.update(mesh,source.view.renderedPosition(),source.settings.movableFrog(),true);}
-                PointGpu gpu=ASSEMBLY_GPU.computeIfAbsent(assembly,k->new PointGpu());gpu.setBackground(true);gpu.update(assembly,0,false,false);
+                for(var source:component){Mesh mesh=source.view.mesh();PointGpu gpu=GPU.computeIfAbsent(source.view,k->new PointGpu());gpu.setPriority(true);gpu.setBackground(false);gpu.update(mesh,source.view.renderedPosition(),source.settings.movableFrog(),true);}
+                PointGpu gpu=ASSEMBLY_GPU.computeIfAbsent(assembly,k->new PointGpu());gpu.setPriority(true);gpu.setBackground(false);gpu.update(assembly,0,false,false);
             }
         }
     }
@@ -192,7 +192,7 @@ public final class PointRenderer {
         if(fallback==null){
             var slot=FALLBACK_JOBS.computeIfAbsent(view,key->new GeometryJobs.Slot<>());
             var snapshot=FALLBACK_SNAPSHOTS.computeIfAbsent(view,key->snapshot(List.of(source),true));
-            FallbackResult result=slot.getBackground(()->assembleFallbackSnapshot(snapshot));
+            FallbackResult result=slot.getPriority(()->assembleFallbackSnapshot(snapshot));
             if(result!=null){
                 Mesh complete=result.assembly.mesh;var attachments=new LinkedHashMap<AttachmentRegion,AttachmentGpu>();result.attachments.forEach((region,mesh)->attachments.put(region,new AttachmentGpu(region,mesh)));
                 var sourceIndices=new ArrayList<Integer>();var targetIndices=new ArrayList<Integer>();

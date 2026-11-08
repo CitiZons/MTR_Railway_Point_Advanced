@@ -32,6 +32,21 @@ public final class ReviewFixRegression {
         require(Crossings.meets(a,curved)&&Crossings.meets(curved.reverse(),a),"Polyline interior crossing");
         Track graded=line("grade",new V3(0,-1,-10),new V3(0,1,10));
         require(Crossings.meets(a,graded),"Use interpolated crossing height, not endpoints");
+        Track longA=org.mtrpoint.Regression.line("long-a","as","ae",new V3(-50,0,0),new V3(50,0,0));
+        Track longB=org.mtrpoint.Regression.line("long-b","bs","be",new V3(49,0,-1),new V3(49,0,99));
+        Track longHigh=org.mtrpoint.Regression.line("long-high","hs","he",new V3(49,.3,-1),new V3(49,.3,99));
+        require(Crossings.meets(longA,longB)&&Crossings.meets(longB.reverse(),longA.reverse()),
+            "Segment tree keeps a crossing at the boundary between sampled segments");
+        require(!Crossings.meets(longA,longHigh),"Segment tree rejects an overpass with the same horizontal geometry");
+        Track channelOnly=line("channel",new V3(0,0,.5),new V3(0,0,2));
+        Track distant=line("distant",new V3(0,0,5),new V3(0,0,7));
+        Track elevated=line("elevated",new V3(0,.3,.5),new V3(0,.3,2));
+        require(!Crossings.meets(a,channelOnly),"Fixture has disjoint centre lines");
+        for(Track road:List.of(a,a.reverse()))for(Track channel:List.of(channelOnly,channelOnly.reverse())){
+            require(Crossings.cutters(List.of(road),List.of(road,distant,channel,elevated,graded),
+                Profile.STANDARD,PointSettings.DEFAULT).equals(List.of(graded,channel)),
+                "Broad phase keeps offset-only crossings and centre-line priority without adding elevated or distant rails");
+        }
     }
     private static void windows(){
         Track a=line("a",new V3(-20,0,0),new V3(20,0,0)),b=line("b",new V3(0,0,-20),new V3(0,0,20));

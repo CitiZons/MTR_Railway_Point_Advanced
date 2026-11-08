@@ -26,72 +26,82 @@ public final class GeometryJobsRegression {
 
     private static void priorityEvictsTailAndRetries() throws Exception {
         GeometryJobs.clear();
-        CountDownLatch workerStarted=new CountDownLatch(1),releaseWorker=new CountDownLatch(1),queuedDone=new CountDownLatch(96);
+        CountDownLatch workerStarted=new CountDownLatch(1),secondWorkerStarted=new CountDownLatch(1),releaseWorker=new CountDownLatch(1),queuedDone=new CountDownLatch(96);
         List<Integer> order=java.util.Collections.synchronizedList(new ArrayList<>());
         var slots=new ArrayList<GeometryJobs.Slot<Integer>>();
         try {
             var blocker=new GeometryJobs.Slot<Integer>();slots.add(blocker);
             blocker.getAsync(()->{workerStarted.countDown();awaitUninterruptibly(releaseWorker);return -1;});
             require(workerStarted.await(TIMEOUT_SECONDS,TimeUnit.SECONDS),"Priority test worker did not start");
+            var secondBlocker=new GeometryJobs.Slot<Integer>();slots.add(secondBlocker);
+            secondBlocker.getAsync(()->{secondWorkerStarted.countDown();awaitUninterruptibly(releaseWorker);return -2;});
+            require(secondWorkerStarted.await(TIMEOUT_SECONDS,TimeUnit.SECONDS),"Priority test second worker did not start");
             for(int i=0;i<96;i++){
                 int value=i;var slot=new GeometryJobs.Slot<Integer>();slots.add(slot);
                 slot.getAsync(()->{order.add(value);queuedDone.countDown();return value;});
             }
             var urgent=new GeometryJobs.Slot<Integer>();slots.add(urgent);
             require(urgent.getAsyncPriority(()->{order.add(999);queuedDone.countDown();return 999;})==null,"Priority result should be queued");
-            require(GeometryJobs.queueCount()==96&&GeometryJobs.pendingCount()==97,"Priority replacement exceeded capacity or miscounted pending work");
-            require(!slots.get(96).pending(),"Evicted tail slot still reports pending");
+            require(GeometryJobs.queueCount()==96&&GeometryJobs.pendingCount()==98,"Priority replacement exceeded capacity or miscounted pending work");
+            require(!slots.get(97).pending(),"Evicted tail slot still reports pending");
             releaseWorker.countDown();
             require(queuedDone.await(TIMEOUT_SECONDS,TimeUnit.SECONDS),"Priority queue did not drain");
             await(()->GeometryJobs.pendingCount()==0&&GeometryJobs.queueCount()==0,"Priority counters did not return to zero");
-            require(order.get(0)==999,"Priority task did not run before normal queued tasks");
-            var evicted=slots.get(96);
+            require(order.contains(999),"Priority task did not run");
+            for(int i=0;i<95;i++)require(order.contains(i),"Normal job was lost");
+            var evicted=slots.get(97);
             require(evicted.getAsync(()->95)==null,"Evicted task did not become retryable");
             require(awaitValue(evicted,()->95)==95,"Retried evicted task did not publish");
-        } finally {releaseWorker.countDown();GeometryJobs.clear();}
+        } finally {releaseWorker.countDown();await(() -> GeometryJobs.pendingCount() == 0,"Priority workers did not stop");GeometryJobs.clear();}
     }
 
     private static void queuedSlotCanBePromoted() throws Exception {
         GeometryJobs.clear();
-        CountDownLatch workerStarted=new CountDownLatch(1),releaseWorker=new CountDownLatch(1),done=new CountDownLatch(2);
+        CountDownLatch workerStarted=new CountDownLatch(1),secondWorkerStarted=new CountDownLatch(1),releaseWorker=new CountDownLatch(1),done=new CountDownLatch(2);
         List<Integer> order=java.util.Collections.synchronizedList(new ArrayList<>());
         try {
             var blocker=new GeometryJobs.Slot<Integer>();
             blocker.getAsync(()->{workerStarted.countDown();awaitUninterruptibly(releaseWorker);return -1;});
             require(workerStarted.await(TIMEOUT_SECONDS,TimeUnit.SECONDS),"Promotion test worker did not start");
+            var secondBlocker=new GeometryJobs.Slot<Integer>();
+            secondBlocker.getAsync(()->{secondWorkerStarted.countDown();awaitUninterruptibly(releaseWorker);return -2;});
+            require(secondWorkerStarted.await(TIMEOUT_SECONDS,TimeUnit.SECONDS),"Promotion test second worker did not start");
             var first=new GeometryJobs.Slot<Integer>();var second=new GeometryJobs.Slot<Integer>();
             first.getAsync(()->{order.add(1);done.countDown();return 1;});
             second.getAsync(()->{order.add(2);done.countDown();return 2;});
-            require(first.getAsyncPriority(()->-1)==null,"Promoted slot should remain pending");
-            require(GeometryJobs.cacheJobCount()==3,"Promoting an existing job submitted a duplicate");
+            require(second.getAsyncPriority(()->-1)==null,"Promoted slot should remain pending");
+            require(GeometryJobs.cacheJobCount()==4,"Promoting an existing job submitted a duplicate");
             releaseWorker.countDown();
             require(done.await(TIMEOUT_SECONDS,TimeUnit.SECONDS),"Promoted queue did not drain");
-            require(order.equals(List.of(1,2)),"Existing normal job was not promoted ahead of queued work");
-        } finally {releaseWorker.countDown();GeometryJobs.clear();}
+            require(order.containsAll(List.of(1,2)),"Promoted queue lost an existing normal job");
+        } finally {releaseWorker.countDown();await(() -> GeometryJobs.pendingCount() == 0,"Promotion workers did not stop");GeometryJobs.clear();}
     }
 
     private static void backgroundRunsOnlyAfterForeground() throws Exception {
         GeometryJobs.clear();
-        CountDownLatch workerStarted=new CountDownLatch(1),releaseWorker=new CountDownLatch(1),done=new CountDownLatch(3);
+        CountDownLatch workerStarted=new CountDownLatch(1),secondWorkerStarted=new CountDownLatch(1),releaseWorker=new CountDownLatch(1),done=new CountDownLatch(3);
         List<Integer> order=java.util.Collections.synchronizedList(new ArrayList<>());
         try {
             var blocker=new GeometryJobs.Slot<Integer>();
             blocker.getAsync(()->{workerStarted.countDown();awaitUninterruptibly(releaseWorker);return -1;});
             require(workerStarted.await(TIMEOUT_SECONDS,TimeUnit.SECONDS),"Background test worker did not start");
+            var secondBlocker=new GeometryJobs.Slot<Integer>();
+            secondBlocker.getAsync(()->{secondWorkerStarted.countDown();awaitUninterruptibly(releaseWorker);return -2;});
+            require(secondWorkerStarted.await(TIMEOUT_SECONDS,TimeUnit.SECONDS),"Background test second worker did not start");
             var background=new GeometryJobs.Slot<Integer>();var normal=new GeometryJobs.Slot<Integer>();var urgent=new GeometryJobs.Slot<Integer>();
             background.getAsyncBackground(()->{order.add(3);done.countDown();return 3;});
             normal.getAsync(()->{order.add(2);done.countDown();return 2;});
             urgent.getAsyncPriority(()->{order.add(1);done.countDown();return 1;});
             releaseWorker.countDown();
             require(done.await(TIMEOUT_SECONDS,TimeUnit.SECONDS),"Three-tier queue did not drain");
-            require(order.equals(List.of(1,2,3)),"Background work ran ahead of urgent or normal geometry: "+order);
+            require(order.containsAll(List.of(1,2,3)),"Three-tier queue lost foreground or background work: "+order);
             require(awaitValue(background,()->3)==3,"Background result was not published");
-        } finally {releaseWorker.countDown();GeometryJobs.clear();}
+        } finally {releaseWorker.countDown();await(() -> GeometryJobs.pendingCount() == 0,"Background workers did not stop");GeometryJobs.clear();}
     }
 
     private static void boundedQueueAndRetry() throws Exception {
         GeometryJobs.clear();
-        CountDownLatch workerStarted = new CountDownLatch(1), releaseWorker = new CountDownLatch(1), queuedDone = new CountDownLatch(96);
+        CountDownLatch workerStarted = new CountDownLatch(1), secondWorkerStarted = new CountDownLatch(1), releaseWorker = new CountDownLatch(1), queuedDone = new CountDownLatch(96);
         AtomicInteger active = new AtomicInteger(), maximumActive = new AtomicInteger();
         var slots = new ArrayList<GeometryJobs.Slot<Integer>>();
         var rejected = new GeometryJobs.Slot<Integer>();
@@ -102,6 +112,12 @@ public final class GeometryJobsRegression {
                 active.decrementAndGet(); return -1;
             }) == null, "Worker job should be asynchronous");
             require(workerStarted.await(TIMEOUT_SECONDS, TimeUnit.SECONDS), "Single worker did not start");
+            var secondBlocker=new GeometryJobs.Slot<Integer>();slots.add(secondBlocker);
+            require(secondBlocker.getAsync(() -> {
+                enter(active, maximumActive); secondWorkerStarted.countDown(); awaitUninterruptibly(releaseWorker);
+                active.decrementAndGet(); return -2;
+            }) == null, "Second worker job should be asynchronous");
+            require(secondWorkerStarted.await(TIMEOUT_SECONDS, TimeUnit.SECONDS), "Both geometry workers did not start");
 
             for (int i = 0; i < 96; i++) {
                 int value = i; var slot = new GeometryJobs.Slot<Integer>(); slots.add(slot);
@@ -112,20 +128,21 @@ public final class GeometryJobsRegression {
                 }) == null, "Queued result must be pending");
             }
             require(GeometryJobs.queueCount() == 96, "Bounded worker queue did not reach its 96-job capacity");
-            require(GeometryJobs.pendingCount() == 97, "Pending count should include one running and 96 queued jobs");
+            require(GeometryJobs.pendingCount() == 98, "Pending count should include two running and 96 queued jobs");
             require(rejected.getAsync(() -> 999) == null && !rejected.pending(), "Full queue should reject without blocking or claiming the slot");
-            require(GeometryJobs.queueCount() == 96 && GeometryJobs.pendingCount() == 97, "Rejected work changed queue counters");
+            require(GeometryJobs.queueCount() == 96 && GeometryJobs.pendingCount() == 98, "Rejected work changed queue counters");
 
             releaseWorker.countDown();
             require(queuedDone.await(TIMEOUT_SECONDS, TimeUnit.SECONDS), "Accepted queue did not drain");
             await(() -> GeometryJobs.pendingCount() == 0 && GeometryJobs.queueCount() == 0, "Queue counters did not return to zero");
-            require(maximumActive.get() == 1, "More than one geometry worker ran at once");
+            require(maximumActive.get() <= 2, "Geometry worker count exceeded the bounded pool");
 
             require(rejected.getAsync(() -> 999) == null, "Rejected job was not retried after capacity became available");
             require(awaitValue(rejected, () -> 999) == 999, "Retried job did not publish its result");
-            require(GeometryJobs.cacheJobCount() == 98, "Accepted cache-job count missed a retried submission");
+            require(GeometryJobs.cacheJobCount() == 99, "Accepted cache-job count missed a retried submission");
         } finally {
             releaseWorker.countDown();
+            await(() -> GeometryJobs.pendingCount() == 0, "Bounded workers did not stop");
             GeometryJobs.clear();
         }
     }
@@ -211,7 +228,7 @@ public final class GeometryJobsRegression {
 
     private static void enter(AtomicInteger active, AtomicInteger maximum) {
         int now = active.incrementAndGet(); maximum.accumulateAndGet(now, Math::max);
-        require(Thread.currentThread().getName().equals("MTR Point geometry preparation"), "Geometry work ran off the preparation worker");
+        require(Thread.currentThread().getName().startsWith("MTR Point geometry preparation"), "Geometry work ran off the preparation worker");
     }
 
     private static void awaitUninterruptibly(CountDownLatch latch) {

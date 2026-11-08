@@ -37,7 +37,9 @@ final class PointGpu implements AutoCloseable {
         GeometryEntry(Mesh mesh,boolean removeGuards){this.mesh=mesh;this.removeGuards=removeGuards;this.snapshot=List.copyOf(mesh.quads);}
         PreparedGeometry poll(boolean priority,boolean background){if(prepared!=null)return prepared;prepared=priority?slot.getPriority(()->prepareGeometry(snapshot,removeGuards)):background?slot.getBackground(()->prepareGeometry(snapshot,removeGuards)):slot.get(()->prepareGeometry(snapshot,removeGuards));return prepared;}
     }
-    private static final int MAX_FACES_PER_BATCH=512;
+    // Keep one upload around four thousand vertices so resource-pack turnouts do not
+    // spend most of their preparation time creating tiny GPU batches.
+    private static final int MAX_FACES_PER_BATCH=2048;
     private static final long UPLOAD_BYTES_PER_FRAME=2L*1024*1024;
     private static final int UPLOAD_BATCHES_PER_FRAME=8;
     private static final int PLAN_FACES_PER_FRAME=8192,PLAN_FACES_PER_GPU_TURN=512;
@@ -45,9 +47,12 @@ final class PointGpu implements AutoCloseable {
     static final class UploadBudget {
         private long bytes,spentNanos;private int batches,plannedFaces;
         void beginFrame(){bytes=0;batches=0;spentNanos=0;plannedFaces=0;}
-        boolean reserve(long amount){if(batches>=UPLOAD_BATCHES_PER_FRAME||bytes+amount>UPLOAD_BYTES_PER_FRAME||spentNanos>=UPLOAD_TIME_NANOS_PER_FRAME)return false;bytes+=amount;batches++;return true;}
+        boolean reserve(long amount,boolean priority){
+            int batchLimit=priority?16:UPLOAD_BATCHES_PER_FRAME;long byteLimit=priority?4L*1024*1024:UPLOAD_BYTES_PER_FRAME;long timeLimit=priority?6_000_000L:UPLOAD_TIME_NANOS_PER_FRAME;
+            if(batches>=batchLimit||bytes+amount>byteLimit||spentNanos>=timeLimit)return false;bytes+=amount;batches++;return true;
+        }
         void recordTime(long elapsedNanos){spentNanos+=Math.max(0,elapsedNanos);}
-        int planAllowance(int requested){int count=Math.min(requested,PLAN_FACES_PER_FRAME-plannedFaces);plannedFaces+=count;return count;}
+        int planAllowance(int requested,boolean priority){int limit=priority?PLAN_FACES_PER_FRAME*2:PLAN_FACES_PER_FRAME;int count=Math.min(requested,Math.max(0,limit-plannedFaces));plannedFaces+=count;return count;}
         long bytes(){return bytes;}int batches(){return batches;}
     }
     private static final UploadBudget UPLOAD_BUDGET=new UploadBudget();
@@ -58,16 +63,16 @@ final class PointGpu implements AutoCloseable {
         while(hasQueuedUploads()&&stalled<queuedUploadCount()){
             PointGpu gpu=nextQueuedUpload();gpu.queuedForUpload=false;
             boolean progressed=false;
-            if(gpu.planWork!=null){int allowance=UPLOAD_BUDGET.planAllowance(PLAN_FACES_PER_GPU_TURN);if(allowance>0){gpu.advancePlan(allowance);progressed=true;}}
+            if(gpu.planWork!=null){int allowance=UPLOAD_BUDGET.planAllowance(PLAN_FACES_PER_GPU_TURN,gpu.priority);if(allowance>0){gpu.advancePlan(allowance);progressed=true;}}
             if(gpu.planWork==null&&!gpu.pending.isEmpty()){
                 Pending task=gpu.pending.peekFirst();
-                if(!task.fingerprintReady){int allowance=UPLOAD_BUDGET.planAllowance(Math.min(PLAN_FACES_PER_GPU_TURN,task.ids.size()-task.cursor));if(allowance>0){gpu.fingerprint(task,allowance);progressed=true;}}
+                if(!task.fingerprintReady){int allowance=UPLOAD_BUDGET.planAllowance(Math.min(PLAN_FACES_PER_GPU_TURN,task.ids.size()-task.cursor),gpu.priority);if(allowance>0){gpu.fingerprint(task,allowance);progressed=true;}}
                 if(task.fingerprintReady){
                     Map<Group,Cached> cache=task.moving?gpu.movingCache:gpu.fixedCache;Cached cached=cache.get(task.group);
                     if(cached!=null&&cached.fingerprint==task.fingerprint){gpu.pending.removeFirst();(task.moving?gpu.nextMoving:gpu.nextFixed).add(cached.batch);progressed=true;}
                     else{
                         long bytes=(long)task.ids.size()*4*36;
-                        if(UPLOAD_BUDGET.reserve(bytes)){
+                        if(UPLOAD_BUDGET.reserve(bytes,gpu.priority)){
                             gpu.pending.removeFirst();long started=System.nanoTime();Batch batch;
                             try{batch=gpu.uploadOne(task);}finally{UPLOAD_BUDGET.recordTime(System.nanoTime()-started);}
                             Cached previous=cache.put(task.group,new Cached(batch,task.fingerprint,task.origin));if(previous!=null)gpu.retireAfterCommit.add(previous.batch);gpu.batchOrigins.put(batch,task.origin);

@@ -20,9 +20,11 @@
 ## 工程背景
 
 - Minecraft 1.20.1；Forge 47.4.18；MTR 4.0.3；
-- 本 mod 0.1.9 当前使用 `mtr_railway_point_advanced:appearance` 通道，协议版本为 `4`；客户端和服务端必须使用同一构建；
+- 本 mod 0.1.10 当前使用 `mtr_railway_point_advanced:appearance` 通道，协议版本为 `4`；客户端和服务端必须使用同一构建；
 - 本 mod 当前支持 `default_3d`、`default_3d_siding` 和自定义 `rail_profiles`；
 - 配套 Citizons Railway 资源包支持 `0.1.4+`；普通轨道预加载按 8 m 区块和配置的高、中、低 LOD 选择模型；
+- 道岔准备每帧最多提交 35 个任务，按玩家距离把近处任务放入 urgent 队列；几何准备使用两个低优先级后台 worker；
+- 近处道岔使用独立的 GPU 规划和上传预算，普通与后台任务使用较低预算；材质包道岔单个 GPU batch 最多 2048 面；
 - 材质包必须使用稳定的资源 ID，不得依赖本地绝对路径。
 
 ## 模型描述格式

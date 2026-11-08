@@ -109,7 +109,7 @@ public final class PointClient {
                 var timing=PointPreparation.started(this);
                 preparedBuild=()->timing.build(()->buildPreparedFrames(j,s,p,sc,sharedSnapshot,boundary,d,ctr,ch,hidden,cutters,bankSnapshot));
             }
-            PreparedFrames result=preparedFrames.getBackground(preparedBuild);
+            PreparedFrames result=preparedFrames.getPriority(preparedBuild);
             if(result==null)return false;
             left=result.left;middle=result.middle;right=result.right;moving=result.moving.clone();mesh=new Mesh();mesh.quads.addAll(left.quads);jointSteel=null;lastSettings=settings;lastFrame=-1;
             preparedFrames.clear();preparedKey=null;preparedBuild=null;builds++;PointPreparation.framesReady(this);return true;
@@ -315,10 +315,15 @@ public final class PointClient {
             if(shared==null)shared=ScissorsLayout.reachedBy(groups,v.junction);
             if(!Objects.equals(shared,v.shared)){v.shared=shared;v.left=null;v.mesh=null;}
         }
+        long layoutEnd=System.nanoTime();
         refreshCrossings(views);
+        long crossingsEnd=System.nanoTime();
         buildByRail(views);
         PointRenderer.refreshComponents();
-        PointMod.LOG.info("MTR Point probe: refreshScissors={}ms views={}",(System.nanoTime()-started)/1_000_000,views.size());
+        long end=System.nanoTime();
+        PointMod.LOG.info("MTR Point probe: refreshScissors={}ms views={} layout={}ms crossings={}ms indexAndComponents={}ms",
+            (end-started)/1_000_000,views.size(),(layoutEnd-started)/1_000_000,
+            (crossingsEnd-layoutEnd)/1_000_000,(end-crossingsEnd)/1_000_000);
     }
     /** MTR's own cells are hidden per rail, so the index is built from every road a view answers
      *  for - the steel it draws and the channels that cut it - not from its junction alone. */
@@ -384,7 +389,7 @@ public final class PointClient {
             // A crossing rail cuts this steel by its flange channels even when the two are pieced
             // on different views, so the cut set is worked out from the rails, not from the view.
             List<Track> scope=v.scissors!=null?v.scissors.tracks():j.tracks();
-            var cut=Crossings.cutters(scope,v.scissors==null?all:without(all,scope),v.profile.tune(v.settings),v.settings);
+            var cut=Crossings.cutters(scope,all,v.profile.tune(v.settings),v.settings);
             if(!cut.equals(v.channels)){v.channels=cut;v.left=null;v.mesh=null;}
         }
         // A turnout hands the far end of a road over to the crossing or the facing turnout that
@@ -435,11 +440,6 @@ public final class PointClient {
         var frog=new FrogGeometry(v.junction,v.settings,v.profile.tune(v.settings),PointMesh.extent(v.junction,v.settings));
         v.claimedInput=b;v.claimedSettings=v.settings;v.claimedProfile=v.profile;
         return v.claimedResult=b.withEnds(Math.max(b.aEnd(),frog.heel(0)),Math.max(b.bEnd(),frog.heel(1)),b.thirdEnd());
-    }
-    private static List<Track> without(List<Track> all,List<Track> scope){
-        var out=new ArrayList<Track>();
-        for(Track t:all)if(scope.stream().noneMatch(o->o.id.equals(t.id)))out.add(t);
-        return List.copyOf(out);
     }
     /** The stretch of a turnout road the modded mesh really covers. The steel is swept and hidden
      *  over the same window, so a native cell is never hidden where no modded rail was drawn. */

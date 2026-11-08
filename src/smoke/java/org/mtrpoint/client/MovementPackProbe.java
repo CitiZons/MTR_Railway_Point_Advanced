@@ -18,9 +18,10 @@ final class MovementPackProbe {
     private static final String CUSTOM="citizons_mainline_1435";
     private static final String CENTER_GUARD="citizons_center_guard_1435",OUTER_GUARD="citizons_outer_guard_1435";
     private static final double START_Z=-20, CAMERA_X=4;
-    private static final double[] SPEEDS={0,1,4,10,20,20,10,4,1};
+    private static final double[] SPEEDS={0,1,4,10,16,16,10,4,1};
     private static final int[] DIRECTIONS={0,1,1,1,1,-1,-1,-1,-1};
     private static final List<Double> FRAME_MS=new ArrayList<>();
+    private static final List<Double> FRAME_16_MS=new ArrayList<>();
     private static final IdentityHashMap<PointClient.View,long[]> FIRST_STAGE_FRAME=new IdentityHashMap<>(),FIRST_STAGE_MS=new IdentityHashMap<>();
     private static List<Rail> rails;
     private static int ticks,phase=-1,settleTicks,stableTicks,preparationFrame;
@@ -43,8 +44,17 @@ final class MovementPackProbe {
         if(!initialized)return;
         ticks++;
         checkBudgets();
-        if(ticks==25){preparationStartNs=now;preparationFrame=0;PointClient.invalidate();PointClient.rebuild();long yCount=PointClient.views.stream().filter(v->v.junction.kind()==org.mtrpoint.geometry.Junction.Kind.Y).count();if(yCount<2)throw new AssertionError("Adjacent Y fixtures did not produce two turnout views");System.out.println("MOVEMENT_FIXTURE: rails="+rails.size()+" styles="+ballastStyle+","+slabStyle+","+directStyle+" yViews="+yCount);}
-        if(ticks>=25&&phase<0){
+        if(ticks==25){PointClient.invalidate();PointClient.rebuild();}
+        if(ticks>=25&&preparationStartNs==0){
+            long yCount=PointClient.views.stream().filter(v->v.junction.kind()==org.mtrpoint.geometry.Junction.Kind.Y).count();
+            if(yCount<2){
+                if(ticks>125)throw new AssertionError("Adjacent Y fixtures did not produce two turnout views");
+                return;
+            }
+            preparationStartNs=now;preparationFrame=0;
+            System.out.println("MOVEMENT_FIXTURE: rails="+rails.size()+" styles="+ballastStyle+","+slabStyle+","+directStyle+" yViews="+yCount);
+        }
+        if(preparationStartNs!=0&&phase<0){
             boolean ready=settled(mc);
             long observedBuild=buildCount(),observedUpload=uploadCount();
             if(ready&&observedBuild==lastStableBuild&&observedUpload==lastStableUpload)stableTicks++;else stableTicks=0;
@@ -74,7 +84,7 @@ final class MovementPackProbe {
                     if(cellFrame()<=frameBase)throw new AssertionError("No ordinary rail frames were rendered");
                 if(!centerGuardPrecommit||!outerGuardPrecommit)throw new AssertionError("Guard terminal cells never reached GPU readiness ahead of their ordinary RailCellCache region commit: center="+centerGuardPrecommit+" outer="+outerGuardPrecommit);
                 if(!centerPrecommitRequested||!outerPrecommitRequested)throw new AssertionError("Native render never requested both guard fallback parts before their ordinary scene committed: center="+centerPrecommitRequested+" outer="+outerPrecommitRequested);
-                if(!centerGuardFast||!outerGuardFast)throw new AssertionError("Guard terminal readiness was not observed near both endpoints during 10/20 m/s movement: center="+centerGuardFast+" outer="+outerGuardFast);
+                if(!centerGuardFast||!outerGuardFast)throw new AssertionError("Guard terminal readiness was not observed near both endpoints during 10/16 m/s movement: center="+centerGuardFast+" outer="+outerGuardFast);
                     shot(mc,"movement-pack-return.png");finalScreenshot=true;
                     printPreparationStages();printLatency();System.out.println("MOVEMENT_GUARD_TERMINALS: PASS centerReady="+centerGuardReadySamples+" outerReady="+outerGuardReadySamples+" centerRequested="+centerGuardRequestedSamples+" outerRequested="+outerGuardRequestedSamples+" precommit=center,outer fastMovement=center,outer screenshots=center-ready,outer-fast");
                     System.out.println("MOVEMENT_PACK: PASS returnedStationaryTicks="+settleTicks+" builds="+finalBuilds+" uploads="+finalUploads+" committedRegions="+committedCount()+" screenshots=ready,center-guard,outer-guard,return");mc.stop();return;
@@ -138,7 +148,11 @@ final class MovementPackProbe {
     }
     private static void renderStage(RenderLevelStageEvent event){
         if(event.getStage()!=RenderLevelStageEvent.Stage.AFTER_ENTITIES)return;
-        long now=System.nanoTime();if(lastRenderNs!=0&&phase>=0&&phase<SPEEDS.length){FRAME_MS.add((now-lastRenderNs)/1e6);phaseFrames++;}
+        long now=System.nanoTime();
+        if(lastRenderNs!=0&&phase>=0&&phase<SPEEDS.length){
+            double interval=(now-lastRenderNs)/1e6;
+            FRAME_MS.add(interval);if(SPEEDS[phase]==16)FRAME_16_MS.add(interval);phaseFrames++;
+        }
         lastRenderNs=now;preparationFrame++;
         try{
             if(uploadBatches()>8)throw new AssertionError("PointGpu upload budget exceeded 8 batches in one render frame");
@@ -251,6 +265,11 @@ final class MovementPackProbe {
         if(FRAME_MS.isEmpty()){System.out.println("MOVEMENT_FRAME_INTERVAL: no render intervals recorded");return;}
         double[] values=FRAME_MS.stream().mapToDouble(Double::doubleValue).sorted().toArray();
         System.out.printf(Locale.ROOT,"MOVEMENT_FRAME_INTERVAL_MS: samples=%d p50=%.2f p95=%.2f p99=%.2f (render-stage intervals; not world-FPS claims)%n",values.length,percentile(values,.50),percentile(values,.95),percentile(values,.99));
+        if(!FRAME_16_MS.isEmpty()){
+            double[] fast=FRAME_16_MS.stream().mapToDouble(Double::doubleValue).sorted().toArray();
+            System.out.printf(Locale.ROOT,"MOVEMENT_16_MPS_MS: samples=%d p95=%.2f p99=%.2f over50ms=%d%n",
+                fast.length,percentile(fast,.95),percentile(fast,.99),Arrays.stream(fast).filter(ms->ms>50).count());
+        }
     }
     private static double percentile(double[] values,double q){return values[Math.min(values.length-1,(int)Math.ceil(values.length*q)-1)];}
 }

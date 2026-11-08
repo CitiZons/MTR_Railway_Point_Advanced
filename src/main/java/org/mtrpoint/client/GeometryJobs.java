@@ -1,17 +1,13 @@
 package org.mtrpoint.client;
 
 import net.minecraft.client.Minecraft;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.LinkedBlockingDeque;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -20,24 +16,20 @@ import java.util.function.Supplier;
 /** Bounded background preparation for immutable geometry snapshots. Jobs must not access Minecraft state. */
 final class GeometryJobs {
     private static final int QUEUE_CAPACITY = 96;
+    private static final int WORKER_COUNT = 2;
     private static final Object LOCK = new Object();
     private static final AtomicInteger PENDING = new AtomicInteger();
     private static final AtomicLong CACHE_JOBS = new AtomicLong();
-    private static final Set<Slot<?>> SLOTS = ConcurrentHashMap.newKeySet();
-    private static final ThreadPoolExecutor WORKER = new ThreadPoolExecutor(
-        1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingDeque<>(QUEUE_CAPACITY),
-        new ThreadFactory() {
-            @Override public Thread newThread(Runnable task) {
-                Thread thread = new Thread(task, "MTR Point geometry preparation");
-                thread.setDaemon(true);
-                return thread;
-            }
-        }, new ThreadPoolExecutor.AbortPolicy());
+    private static final Set<Slot<?>> SLOTS = new HashSet<>();
+    // Each tier is FIFO. Producers and the workers share one lock for admission and dequeue.
+    private static final List<ArrayDeque<JobFuture<?>>> QUEUES = List.of(new ArrayDeque<>(), new ArrayDeque<>(), new ArrayDeque<>());
+    private static int queued;
+    private static final List<Thread> WORKERS = new ArrayList<>();
 
     private GeometryJobs() {}
 
     static int pendingCount() { return PENDING.get(); }
-    static int queueCount() { return WORKER.getQueue().size(); }
+    static int queueCount() { synchronized (LOCK) { return queued; } }
     static long cacheJobCount() { return CACHE_JOBS.get(); }
 
     /** Cancel queued work and invalidate all results without waiting for the worker thread. */
@@ -46,10 +38,12 @@ final class GeometryJobs {
             epoch++;
             for (Slot<?> slot : SLOTS) slot.reset();
             SLOTS.clear();
-            List<Runnable> queued = new ArrayList<>();
-            WORKER.getQueue().drainTo(queued);
-            for (Runnable job : queued) if (job instanceof Future<?> future) future.cancel(false);
-            WORKER.purge();
+            for (ArrayDeque<JobFuture<?>> queue : QUEUES) {
+                for (JobFuture<?> future : queue) future.cancel(false);
+                queue.clear();
+            }
+            queued=0;
+            LOCK.notifyAll();
             CACHE_JOBS.set(0);
         }
     }
@@ -79,7 +73,7 @@ final class GeometryJobs {
                 if (ready) return value;
                 Minecraft minecraft = forceAsync ? null : Minecraft.getInstance();
                 if (!forceAsync && (minecraft == null || minecraft.level == null)) {
-                    if (job != null) { job.future.cancel(true); WORKER.remove(job.future); }
+                    if (job != null) { job.future.cancel(true); removeQueued(job.future); }
                     job = null;
                     value = build.get();
                     ready = true;
@@ -116,7 +110,7 @@ final class GeometryJobs {
                 if (job != null) {
                     if (job.epoch != epoch) job = null;
                     else if (!job.future.isDone()) {
-                        if (priority.rank != job.future.priority.rank) reprioritize(job.future, priority);
+                        if (priority != job.future.priority) reprioritize(job.future, priority);
                         return null;
                     }
                     else {
@@ -128,13 +122,22 @@ final class GeometryJobs {
                     }
                 }
 
-                if(priority==JobPriority.BACKGROUND&&WORKER.getQueue().remainingCapacity()==0)return null;
-                long submittedEpoch = epoch;
+                if (!admit(priority)) return null;
                 JobFuture<T> future = new JobFuture<>(this, priority, build);
                 PENDING.incrementAndGet();
-                if (!enqueue(future)) { future.cancel(false); return null; }
                 CACHE_JOBS.incrementAndGet();
-                job = new Job<>(submittedEpoch, future);
+                job = new Job<>(epoch, future);
+                QUEUES.get(priority.ordinal()).addLast(future);
+                queued++;
+                WORKERS.removeIf(worker->!worker.isAlive());
+                while (WORKERS.size()<WORKER_COUNT) {
+                    Thread worker=new Thread(GeometryJobs::work, "MTR Point geometry preparation "+(WORKERS.size()+1));
+                    worker.setDaemon(true);
+                    worker.setPriority(Math.max(Thread.MIN_PRIORITY,Thread.NORM_PRIORITY-1));
+                    WORKERS.add(worker);
+                    worker.start();
+                }
+                LOCK.notifyAll();
                 return null;
         }
 
@@ -154,7 +157,7 @@ final class GeometryJobs {
         }
 
         private void reset() {
-            if (job != null) { job.future.cancel(true); WORKER.remove(job.future); }
+            if (job != null) { job.future.cancel(true); removeQueued(job.future); }
             job = null;
             value = null;
             ready = false;
@@ -164,11 +167,11 @@ final class GeometryJobs {
     private static long epoch;
     private record Job<T>(long epoch, JobFuture<T> future) {}
 
-    private enum JobPriority { BACKGROUND(0), NORMAL(1), URGENT(2); final int rank; JobPriority(int rank){this.rank=rank;} }
+    private enum JobPriority { BACKGROUND, NORMAL, URGENT }
 
     private static final class JobFuture<T> extends FutureTask<T> {
         private final Slot<T> slot;
-        private volatile JobPriority priority;
+        private JobPriority priority;
         private final AtomicBoolean accounted = new AtomicBoolean();
         JobFuture(Slot<T> slot, JobPriority priority, Supplier<T> build) {
             super(build::get); this.slot=slot; this.priority=priority;
@@ -180,32 +183,48 @@ final class GeometryJobs {
         }
     }
 
-    /** Producers serialize through LOCK; the single worker can only improve available capacity. */
-    private static boolean enqueue(JobFuture<?> future) {
-        if (WORKER.getPoolSize() == 0) {
-            try { WORKER.execute(future); return true; }
-            catch (RejectedExecutionException stopped) { return false; }
+    private static boolean admit(JobPriority priority) {
+        if (queued < QUEUE_CAPACITY) return true;
+        for (int tier = 0; tier < priority.ordinal(); tier++) {
+            JobFuture<?> tail = QUEUES.get(tier).pollLast();
+            if (tail == null) continue;
+            queued--;
+            tail.evict();
+            return true;
         }
-        LinkedBlockingDeque<Runnable> queue=(LinkedBlockingDeque<Runnable>)WORKER.getQueue();
-        if(queue.remainingCapacity()==0){
-            Runnable tail=queue.peekLast();
-            if(!(tail instanceof JobFuture<?> queued)||queued.priority.rank>=future.priority.rank||!queue.removeLastOccurrence(tail))return false;
-            queued.evict();
-        }
-        insertOrdered(queue,future);
+        return false;
+    }
+
+    private static boolean removeQueued(JobFuture<?> future) {
+        if (!QUEUES.get(future.priority.ordinal()).remove(future)) return false;
+        queued--;
         return true;
     }
 
-    private static void reprioritize(JobFuture<?> future,JobPriority priority) {
-        LinkedBlockingDeque<Runnable> queue=(LinkedBlockingDeque<Runnable>)WORKER.getQueue();
-        if(queue.remove(future)){future.priority=priority;insertOrdered(queue,future);}
+    private static void reprioritize(JobFuture<?> future, JobPriority priority) {
+        if (!removeQueued(future)) return;
+        future.priority = priority;
+        QUEUES.get(priority.ordinal()).addLast(future);
+        queued++;
     }
 
-    /** Stable ordering keeps FIFO within each tier and always puts normal work ahead of background. */
-    private static void insertOrdered(LinkedBlockingDeque<Runnable> queue,JobFuture<?> future){
-        List<Runnable> jobs=new ArrayList<>();queue.drainTo(jobs);jobs.add(future);
-        jobs.sort((a,b)->Integer.compare(((JobFuture<?>)b).priority.rank,((JobFuture<?>)a).priority.rank));
-        for(Runnable job:jobs)if(!queue.offerLast(job))throw new IllegalStateException("Geometry job queue capacity changed while locked");
+    private static void work() {
+        while (true) {
+            JobFuture<?> next = null;
+            synchronized (LOCK) {
+                while (queued == 0) {
+                    try { LOCK.wait(); }
+                    catch (InterruptedException cancelled) { /* A cleared task may interrupt the worker. */ }
+                }
+                for (int tier = QUEUES.size() - 1; tier >= 0 && next == null; tier--) {
+                    next = QUEUES.get(tier).pollFirst();
+                }
+                queued--;
+            }
+            Thread.interrupted();
+            try { next.run(); }
+            catch (Throwable ignored) { /* FutureTask normally captures failures, keep a worker alive if a task escapes. */ }
+        }
     }
 
     private static <T> T result(Future<T> future) {
