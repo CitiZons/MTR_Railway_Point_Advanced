@@ -80,6 +80,9 @@ final class ContinuousGuards {
         return distance<=reach+interval/2+.001&&FRAME_TERMINALS.add(key);
     }
     static void supports(Rail rail,RailResource resource,boolean flip,V3 a,V3 b,ProfileModel model,Track track,Ends ends,V3 move){
+        // Resolve the support LOD at submission time. Turnout snapshots can
+        // carry a high-detail profile even when the camera has moved away.
+        model=RailLod.model(resource.getId(),a.lerp(b,.5));
         var guard=model.continuousGuard();double center=track.nearest(a.lerp(b,.5).add(move)),startReach=reach(track,guard.length(),ends,true),endReach=reach(track,guard.length(),ends,false),d=ends.start?center:Double.POSITIVE_INFINITY;if(ends.end)d=Math.min(d,track.length-center);
         double effective=d==center?startReach:endReach,scale=effective/guard.length();if(d<guard.noseLength()*scale)return;double inset=d<effective?guard.supportInset()*(1-d/effective):0;
         RailSweep sweep=RailSampler.sweep(rail,resource,a,b);move=move.add(a.lerp(b,.5).sub(sweep.a().lerp(sweep.b(),.5)));

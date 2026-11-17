@@ -20,31 +20,50 @@
 ## 工程背景
 
 - Minecraft 1.20.1；Forge 47.4.18；MTR 4.0.3；
-- 本 mod 0.1.10 当前使用 `mtr_railway_point_advanced:appearance` 通道，协议版本为 `4`；客户端和服务端必须使用同一构建；
+- 本 mod 0.1.11 当前使用 `mtr_railway_point_advanced:appearance` 通道，协议版本为 `4`；客户端和服务端必须使用同一构建；
 - 本 mod 当前支持 `default_3d`、`default_3d_siding` 和自定义 `rail_profiles`；
-- 配套 Citizons Railway 资源包支持 `0.1.4+`；普通轨道预加载按 8 m 区块和配置的高、中、低 LOD 选择模型；
+- 兼容 Citizons Railway 资源包 `0.1.4+`，建议使用 `0.1.5`；新模型按 `0.1.5` 的 8 个入口和 `lod`／`modelGroups` 结构编写；普通轨道预加载按 8 m 区块和配置的高、中、低 LOD 选择模型；
 - 道岔准备每帧最多提交 35 个任务，按玩家距离把近处任务放入 urgent 队列；几何准备使用两个低优先级后台 worker；
 - 近处道岔使用独立的 GPU 规划和上传预算，普通与后台任务使用较低预算；材质包道岔单个 GPU batch 最多 2048 面；
 - 材质包必须使用稳定的资源 ID，不得依赖本地绝对路径。
 
 ## 模型描述格式
 
-为每种轨道样式提供类似以下描述：
+当前 `rail_profiles` 以轨型描述声明截面、模型分组、LOD 和连续护轨。最小示例如下：
 
 ```json
 {
-  "format": 1,
-  "model": "models/rail/default_3d.obj",
-  "sleeperModel": "models/rail/sleeper.obj",
-  "fastenerModel": "models/rail/fastener.obj",
-  "steelTexture": "textures/rail/steel.png",
-  "endTexture": "textures/rail/end.png",
-  "detailLevel": 2,
-  "nativeProfile": "default_3d"
+  "style": "my_custom_rail",
+  "track": true,
+  "gauge": 1.435,
+  "top": 0.26428,
+  "headWidth": 0.068,
+  "footWidth": 0.14,
+  "railHeight": 0.165,
+  "steelTexture": "my_pack:textures/steel.png",
+  "sleeperTexture": "my_pack:textures/concrete.png",
+  "model": "my_pack:models/rail/rail_high.obj",
+  "lod": {
+    "near": {"model": "my_pack:models/rail/rail_high.obj", "maxDistance": 4},
+    "mid": {"model": "my_pack:models/rail/rail_mid.obj", "maxDistance": 12},
+    "far": {"model": "my_pack:models/rail/rail_low.obj", "maxDistance": 128},
+    "selection": "distance"
+  },
+  "modelGroups": {
+    "rail": ["rail_right"],
+    "sleeper": ["sleeper"],
+    "fastener": ["fastener_right"],
+    "preserve": ["ballast"],
+    "supports": ["sleeper", "fastener_left", "fastener_right"]
+  }
 }
 ```
 
-字段可以为空，但必须有明确回退：缺少实体模型时使用本 mod 的通用钢轨几何；缺少端面材质时使用钢轨主体材质；缺少扣件或轨枕模型时保留现有轨枕/扣件表现；单个描述解析失败时只禁用该描述，不影响其他轨道样式。
+- 三档 LOD 必须保持相同的轨距、轨顶高度、钢轨中心、纵向范围和截面语义，否则注册会被拒绝并回退到 MTR 原生模型。
+- `modelGroups.fastener` 必须存在；低精度模型也必须把扣件写入 `fastener_left` / `fastener_right`，不能继承轨枕分组。
+- 带连续护轨时，额外声明 `continuousGuard.groups`、`supportGroups`、`endpointModel` 和 `endpointLength`；护轨扣件组要同时出现在 `modelGroups.supports` 与 `continuousGuard.supportGroups`，避免端头同时绘制偏移和未偏移副本。
+- 每个 OBJ 顶部只声明一个 `mtllib`，同目录 MTL 的 `map_Kd` 必须解析到实际存在的图集。
+- 字段可以精简，但必须有明确回退：缺少实体模型时使用本 mod 的通用钢轨几何；缺少端面材质时使用钢轨主体材质；单个描述解析失败时只禁用该描述，不影响其他轨道样式。
 
 ## 真实钢轨模型要求
 

@@ -141,7 +141,7 @@ public final class OrdinaryRailCache {
                 ProfileModel model=RailLod.model(e.resource.getId(),chunk.center());
                 var localEnds=segment.endpoint?ends:null;
                 segment.submit(model,owners,localEnds,()->build(e,segment,model,localEnds));
-                if(ends!=null&&GuardTerminalCache.terminalSegment(e.sampled,segment.cells,e.high.continuousGuard().length(),ends)){
+                if(ends!=null&&!e.resource.getId().contains("center_guard")&&GuardTerminalCache.terminalSegment(e.sampled,segment.cells,e.high.continuousGuard().length(),ends)){
                     terminalContributions.add(segment.contribution);terminalOwners.add(owners);terminalChunks.add(chunk);
                 }
             }

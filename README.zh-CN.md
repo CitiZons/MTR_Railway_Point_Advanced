@@ -2,15 +2,15 @@
 
 [English](README.en.md) | [简体中文](README.zh-CN.md)
 
-本项目是 [MTR](https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway) 的道岔外观扩展，当前版本 **0.1.10**。根据实际轨道曲线、坡度和倾角生成基本轨、尖轨、翼轨、护轨、岔心、轮缘槽、连杆、扣件及岔枕。自带默认模型和材质，也可使用轨道资源包。
+本项目是 [MTR](https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway) 的道岔外观扩展，当前版本 **0.1.11**。根据实际轨道曲线、坡度和倾角生成基本轨、尖轨、翼轨、护轨、岔心、轮缘槽、连杆、扣件及岔枕。自带默认模型和材质，也可使用轨道资源包。
 
 ## 安装
 
 需要 Minecraft **1.20.1**、Forge **47.4.18**、MTR Forge **4.0.3**。
 
-将 `mtr_railway_point_advanced-0.1.10.jar` 放入客户端和服务器的 `mods` 文件夹；两端使用相同构建，不要同时安装多个版本。网络协议为 `4`。`point-runtime-probe` 是开发探针，不用于正式游戏。
+将 `mtr_railway_point_advanced-0.1.11.jar` 放入客户端和服务器的 `mods` 文件夹；两端使用相同构建，不要同时安装多个版本。网络协议为 `4`。`point-runtime-probe` 是开发探针，不用于正式游戏。
 
-配套资源包为 **[Citizons Railway](https://github.com/CitiZons/MTR_Citizons_Railway) 0.1.4+**，启用后提供有砟、无砟有枕、无砟无枕及连续护轨样式。Mod 和资源包的版本号独立。
+配套资源包为 **[Citizons Railway](https://github.com/CitiZons/MTR_Citizons_Railway) 0.1.4+**，提供有砟、无砟有枕、无砟无枕及连续护轨样式。建议使用 **0.1.5**，其中包含修正后的材质与 LOD。Mod 和资源包的版本号独立。
 
 ## 使用
 
@@ -30,6 +30,9 @@
 - 匹配的接头补齐不超过 2 cm 的缝隙。仅连接匹配的开放边界，保留轮缘槽与钢轨截面开口。
 - 尖轨及可动岔心按 MTR、BRsignal 的只读运行状态显示视觉动画。
 - 连续中央护轨和外护轨在移动中保留端部收紧形状，不必等待周围普通轨道缓存完成。
+- 连续护轨承座在提交时按当前位置重新选择高／中／低精度，避免镜头远离后仍使用道岔快照里的高精度承座。
+- 中央护轨端点不再额外提交到普通终端缓存，只保留连续护轨路径生成的端头。
+- 道岔护轨的高挡板和中央三角肋保留到中精度；低精度只保留共用底座。
 
 ## 资源包适配
 
@@ -95,7 +98,7 @@
 .\gradlew.bat build --offline --no-daemon --console=plain
 ```
 
-构建产物为 `build/libs/mtr_railway_point_advanced-0.1.10.jar`。
+构建产物为 `build/libs/mtr_railway_point_advanced-0.1.11.jar`。
 
 ## 文档与许可
 

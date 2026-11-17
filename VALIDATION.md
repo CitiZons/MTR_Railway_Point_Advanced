@@ -1,5 +1,13 @@
 # 验证记录
 
+## 0.1.11（2026-11-17）
+
+- 相对 0.1.10，生产代码只改 `ContinuousGuards`、`OrdinaryRailCache`、`TurnoutFittings` 和 `build.gradle` 版本号；`Profiles` 与 `PointNetwork` 未变，网络协议保持 `4`。
+- `ContinuousGuards.supports` 在提交承座时按当前位置重新解析 LOD；`OrdinaryRailCache` 对中央护轨跳过 `GuardTerminalCache`；`TurnoutFittings` 把护轨高挡板与中央三角肋的绘制上限从低精度改为中精度。
+- 兼容 Citizons Railway `0.1.4+`，建议 `0.1.5`。`0.1.5` 的生成器、`railway_resource_checks/validate.py` 和 `package_release.py` 全部通过：8 个样式及其描述、模型和 `mtllib` 检查通过，逐字节幂等再生成通过。产物为 `dist/Citizons_Railway-0.1.5.zip`、`dist/Citizons_Railway.zip` 和 `resourcepacks/Citizons_Railway-0.1.5`。
+- alpha.4 客户端已安装 `mtr_railway_point_advanced-0.1.11.jar` 和 `Citizons_Railway-0.1.5`，`options.txt` 指向 `file/Citizons_Railway-0.1.5`；旧 `0.1.4` 安装目录及 ZIP 已移除。用户确认首次进入世界不再大面积紫轨、外护轨中低精度扣件不再回退、高精度护轨端头不再同时出现偏移和未偏移扣件。
+- 回归说明：为执行现有回归，修正了 `PointGpuStaticRegression` 中旧的 `UploadBudget.reserve(amount)` 调用（现签名为 `reserve(long, boolean)`），该测试此前无法编译。执行后 `NETWORK` 至 `CONTINUOUS_SUPPORTS` 均通过；随后 `SLAB_SEATS` 在“三种道床护轨扣件逐面一致”的既有断言处报告 `slab` 不一致。该失败在 0.1.4 与 0.1.5 资源包下均可复现，本轮未改该断言的比较逻辑，也未修正对应生产路径，因此不宣称 Mod 全量回归通过。本次没有重新生成 Mod JAR；客户端使用的仍是已构建的 0.1.11 产物。
+
 ## 0.1.10（2026-11-08）
 
 - `gradlew regression --offline --console=plain` 通过，覆盖有界几何队列、双 worker 并发上限、urgent/normal/background 分层、清理、重试和异常传递，以及现有全部几何、缓存、资源模型和道岔回归。

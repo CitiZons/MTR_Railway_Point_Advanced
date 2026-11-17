@@ -1,5 +1,19 @@
 # 更新记录 / Changelog
 
+## 0.1.11 — 2026-11-17
+
+- 连续护轨承座在提交时按当前位置重新选择高／中／低精度，避免镜头远离后仍沿用道岔快照中的高精度承座。
+- 中央护轨端点不再额外进入 `GuardTerminalCache`，端头只由连续护轨路径生成，消除重复的终端几何。
+- 道岔护轨的高挡板和中央三角肋保留到中精度；低精度只保留共用底座，减少远处护轨的冗余面。
+- 支持 Citizons Railway `0.1.4+`，建议使用 `0.1.5`；相对 0.1.10 不改网络协议（保持 4），`Profiles` 和 `PointNetwork` 未变，0.1.10／0.1.11 客户端与服务端可混用，但外观修正只在 0.1.11 完整生效。
+- 本轮生产代码只改 `build.gradle` 版本号、`ContinuousGuards`、`OrdinaryRailCache` 和 `TurnoutFittings`；另修正 `PointGpuStaticRegression` 中过时的 `UploadBudget.reserve` 调用，使回归测试可编译。未修改行车、连接或信号逻辑。
+
+- Resolve continuous-guard support LOD at submission time instead of reusing the turnout snapshot's high-detail profile after the camera moves away.
+- Stop submitting central-guard terminals through `GuardTerminalCache`; the continuous-guard endpoint path is the sole source of the terminal, removing duplicate terminal geometry.
+- Keep turnout guard cheek plates and the centre gusset through medium detail; low detail keeps only the shared base, reducing distant guard faces.
+- Support Citizons Railway `0.1.4+`; use `0.1.5`. The network protocol remains `4`; `Profiles` and `PointNetwork` are unchanged, so 0.1.10 and 0.1.11 client/server builds can interoperate, but the visual corrections are complete only in 0.1.11.
+- The production change is limited to the `build.gradle` version plus `ContinuousGuards`, `OrdinaryRailCache` and `TurnoutFittings`; the only test change updates the outdated `UploadBudget.reserve` call in `PointGpuStaticRegression` so the regression suite compiles. Routing, connections and signalling are untouched.
+
 ## 0.1.10
 
 - 将可见道岔的准备任务提升到 urgent 队列，并按玩家距离优先提交，减少近处道岔等待时间。

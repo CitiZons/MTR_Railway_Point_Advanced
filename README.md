@@ -2,17 +2,17 @@
 
 [English](README.en.md) | [简体中文](README.zh-CN.md)
 
-![Minecraft 1.20.1](https://img.shields.io/badge/Minecraft-1.20.1-62a35a?style=flat-square) ![Forge 47.4.18](https://img.shields.io/badge/Forge-47.4.18-f59e0b?style=flat-square) ![MTR 4.0.3](https://img.shields.io/badge/MTR-4.0.3-3b82f6?style=flat-square) ![Version 0.1.10](https://img.shields.io/badge/version-0.1.10-2563eb?style=flat-square) ![License MIT](https://img.shields.io/badge/license-MIT-8b5cf6?style=flat-square)
+![Minecraft 1.20.1](https://img.shields.io/badge/Minecraft-1.20.1-62a35a?style=flat-square) ![Forge 47.4.18](https://img.shields.io/badge/Forge-47.4.18-f59e0b?style=flat-square) ![MTR 4.0.3](https://img.shields.io/badge/MTR-4.0.3-3b82f6?style=flat-square) ![Version 0.1.11](https://img.shields.io/badge/version-0.1.11-2563eb?style=flat-square) ![License MIT](https://img.shields.io/badge/license-MIT-8b5cf6?style=flat-square)
 
-A visual turnout addon for [MTR](https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway), version **0.1.10**. It generates stock rails, switch rails, wings, guards, frogs, flangeways, rods, fittings and sleepers along the actual alignment, grade and cant. Default models and materials are included; rail resource packs are optional.
+A visual turnout addon for [MTR](https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway), version **0.1.11**. It generates stock rails, switch rails, wings, guards, frogs, flangeways, rods, fittings and sleepers along the actual alignment, grade and cant. Default models and materials are included; rail resource packs are optional.
 
 ## Installation
 
 Requires Minecraft **1.20.1**, Forge **47.4.18** and MTR Forge **4.0.3**.
 
-Install `mtr_railway_point_advanced-0.1.10.jar` in both client and server `mods` folders. Use the same build on both sides and remove older copies. The network protocol is `4`; do not install the development-only `point-runtime-probe` in a normal game.
+Install `mtr_railway_point_advanced-0.1.11.jar` in both client and server `mods` folders. Use the same build on both sides and remove older copies. The network protocol is `4`; do not install the development-only `point-runtime-probe` in a normal game.
 
-The companion pack is **[Citizons Railway](https://github.com/CitiZons/MTR_Citizons_Railway) 0.1.4+**, with ballast, slab, direct-support and continuous-guard styles. The mod and pack have separate version numbers.
+The companion pack is **[Citizons Railway](https://github.com/CitiZons/MTR_Citizons_Railway) 0.1.4+**, with ballast, slab, direct-support and continuous-guard styles. Use **0.1.5** for the corrected material and LOD set. The mod and pack have separate version numbers.
 
 ## Usage
 
@@ -32,6 +32,9 @@ The companion pack is **[Citizons Railway](https://github.com/CitiZons/MTR_Citiz
 - Joints receive patches for gaps up to 2 cm. Only matching open edges are bridged, preserving flangeways and rail-section openings.
 - Switch and movable-frog animation follows read-only MTR and BRsignal operating state.
 - Continuous centre and outer guards retain their inward-tapered terminal shapes during movement, without waiting for the surrounding ordinary-rail cache to finish.
+- Continuous-guard supports choose their LOD at submission time, so a turnout snapshot cannot keep high-detail guard seats after the camera has moved away.
+- Central-guard terminals are not submitted through the ordinary terminal cache in addition to the guard endpoint path.
+- Turnout guard cheek plates and the centre gusset remain through medium detail; low detail keeps only the shared base.
 
 ## Resource packs
 
@@ -95,7 +98,7 @@ Requires JDK 17 and the compile-time dependency `../MTR_BRsignal_addon/libs/MTR-
 .\gradlew.bat build --offline --no-daemon --console=plain
 ```
 
-The build produces `build/libs/mtr_railway_point_advanced-0.1.10.jar`.
+The build produces `build/libs/mtr_railway_point_advanced-0.1.11.jar`.
 
 ## Documentation and licence
 

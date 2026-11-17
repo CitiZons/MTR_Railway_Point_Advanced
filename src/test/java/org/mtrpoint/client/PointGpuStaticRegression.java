@@ -13,16 +13,16 @@ public final class PointGpuStaticRegression {
         var budget=new PointGpu.UploadBudget();
         budget.beginFrame();
         try{Thread.sleep(20);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new AssertionError(interrupted);}
-        for(int i=0;i<8;i++)require(budget.reserve(1),"Upload budget rejected a batch before its batch cap");
-        require(!budget.reserve(1),"Upload budget exceeded its per-frame batch cap");
+        for(int i=0;i<8;i++)require(budget.reserve(1,false),"Upload budget rejected a batch before its batch cap");
+        require(!budget.reserve(1,false),"Upload budget exceeded its per-frame batch cap");
         budget.beginFrame();
-        require(budget.reserve(1),"Idle frame time incorrectly exhausted the upload budget");
+        require(budget.reserve(1,false),"Idle frame time incorrectly exhausted the upload budget");
         budget.recordTime(3_000_000L);
-        require(!budget.reserve(1),"Upload budget exceeded its GPU upload time cap");
+        require(!budget.reserve(1,false),"Upload budget exceeded its GPU upload time cap");
         budget.beginFrame();
         require(budget.bytes()==0&&budget.batches()==0,"beginFrame did not reset upload counters");
-        require(budget.reserve(2L*1024*1024),"Upload budget rejected its exact byte limit");
-        require(!budget.reserve(1),"Upload budget exceeded its per-frame byte cap");
+        require(budget.reserve(2L*1024*1024,false),"Upload budget rejected its exact byte limit");
+        require(!budget.reserve(1,false),"Upload budget exceeded its per-frame byte cap");
 
         Mesh mesh=new Mesh();
         var steel=Profile.STANDARD.steel();

@@ -71,8 +71,10 @@ public final class TurnoutFittings {
         }
         box(mesh,running.sub(n.mul(.21)),guard.add(n.mul(.20)),Math.min(.22,s.sleeperWidth()*.9),base,top,surface,p,index,2);
         outerClamp(mesh,running,n.mul(-1),p,s,index);
-        box(mesh,guard.add(n.mul(.013)),guard.add(n.mul(.024)),.16,top+.036,top+.10,surface,p,index,2);
-        for(double along:new double[]{-.055,0,.055})gusset(mesh,guard.add(f.mul(along)),n,f,top,surface,p,index,along==0?2:0);
+        // Keep the tall guard cheek through the middle LOD. The far LOD keeps
+        // only the shared base, which avoids carrying the full guard support.
+        box(mesh,guard.add(n.mul(.013)),guard.add(n.mul(.024)),.16,top+.036,top+.10,surface,p,index,1);
+        for(double along:new double[]{-.055,0,.055})gusset(mesh,guard.add(f.mul(along)),n,f,top,surface,p,index,along==0?1:0);
         bolt(mesh,guard.add(n.mul(.155)),n,top,surface,p,index);
     }
     public static void guardsAtRow(Mesh mesh,List<GuardRails.Run> guards,V3 center,V3 normal,Profile p,PointSettings s,int index){
